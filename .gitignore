@@ -1,0 +1,81 @@
+# Ignore macOS specific files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# Byte-compiled Python files
+*.py[cod]
+__pycache__/
+*.so
+*.pyd
+
+# Unit test, coverage, and pytest cache
+*.coverage
+*.cover
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*.log
+*.out
+htmlcov/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Machine learning model checkpoints and logs
+checkpoints/
+logs/
+
+# Data files
+*.csv
+*.tsv
+*.dat
+*.txt
+
+# Ignore images and heavy media files
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.svg
+
+# Ignore large binary files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.iso
+*.exe
+
+# Ignore IDE specific files
+.vscode/
+.idea/
+*.sublime*
+
+# Ignore temporary files created by editors
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Ignore __init__.py files
+__init__.py
