@@ -50,8 +50,25 @@ class Gridworld(gym.Env):
     def wall_mask(self) -> np.ndarray:
         return self._walls
     
+    @property
+    def n_states(self) -> np.ndarray:
+        return np.prod(self.observation_space.high)
+    
     def _get_obs(self) -> np.ndarray:
         return np.array(self._agent_location, dtype=int)
+    
+    def obs_to_id(self, observation: np.ndarray) -> int:
+        """Generates unique index for each observation. Useful for tabular agent methods.
+        Args:
+            observation (np.ndarray): Environment observation
+
+        Returns:
+            int: Unique id of the observation.
+        """
+        return observation[0]*self.observation_space.high[1] + observation[1]
+    
+    def act_to_id(self, action: int) -> int:
+        return action
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """ Reset the environment and return the initial state number
@@ -139,4 +156,3 @@ if __name__ == '__main__':
             done = terminated or truncated
     
     env.plot_values(table=visitations, plot_name='visitations')
-
