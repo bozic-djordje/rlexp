@@ -1,0 +1,32 @@
+# Experiment hyper-parameters
+grid:
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W', 'W', 'W', 'W', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W', 'W', 'W', 'W', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+n_episodes: 10
+max_steps: 100
+slip_chance: 0.25
+buffer_size: 10000
+seed: 1
+
+# States of interest for visualisations
+states:
+  a: [4,7]
+  b: [5, 11]
+  c: [4,5]
+  d: [5, 9]
+  e: [4,3]
+  f: [1, 5]
+
+
+# Algorithm hyper-parameters
+step_size: 0.01 #alpha
+disc_fact: 0.9 #gamma
+batch_size: 16
+algo_type: 'on_policy' # in ['off_policy', 'on_policy']
