@@ -8,7 +8,7 @@ from matplotlib import cm
 
 
 class Gridworld(gym.Env):
-    def __init__(self, store_path, grid: List, step_r: float=-1, goal_r: float=10, goal_pos: Tuple=(4, 5), start_pos: Tuple=None, max_steps:int=None, seed:int=None):
+    def __init__(self, grid: List, store_path:str, slip_chance:float=0, step_r: float=-1, goal_r: float=10, goal_pos: Tuple=(4, 5), start_pos: Tuple=None, max_steps:int=None, seed:int=None):
         self._grid = np.array(grid)
         self._walls = np.equal(self._grid, 'W')
         self._agent_location = start_pos
@@ -19,6 +19,7 @@ class Gridworld(gym.Env):
             2: np.array([0, -1]), # left
             3: np.array([0, 1]),  # right
         }
+        self._slip_chance = slip_chance
         self._max_steps = max_steps
         self._steps = 0
         self.action_space = gym.spaces.Discrete(4)
@@ -113,7 +114,18 @@ class Gridworld(gym.Env):
         """
         assert(action >= 0)
         assert(action <= 3)
-        # TODO: Make transitions stochastic at some point
+        
+        # If the agent slips
+        if self.rng.random() < self._slip_chance:
+            if action == 0:
+                action = self.rng.choice([2, 3])
+            elif action == 1:
+                action = self.rng.choice([3, 2])
+            elif action == 2:
+                action = self.rng.choice([1, 0])
+            else:
+                action = self.rng.choice([0, 1])
+
         agent_location = tuple(self._get_obs() + self._action_to_direction[action])
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
