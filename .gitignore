@@ -79,3 +79,5 @@ logs/
 
 # Ignore __init__.py files
 __init__.py
+*.trash
+*artefacts
