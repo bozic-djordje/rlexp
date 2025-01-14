@@ -24,8 +24,9 @@ class SRTabular:
         self.disc_fact = disc_fact
 
         # psi^\pi(s,a) from (Barreto et al., 2018) Eq. (4)
-        # 1D tensor corresponding to all possible transitions \in R^{|S|^2|A|}
-        self.psi_sparse = np.zeros(n_states**2 * n_acts)
+        # 3D tensor corresponding to all possible transitions \in R^{|S|x|A|x|S|^2|A|}
+        # psi_sparse(s,a) \in R^{|S|^2A}
+        self.psi_sparse = np.zeros((n_states, n_acts, n_states**2 * n_acts))
         # 3D tensor counting all possible transitions. Compared to self.psi_sparse, trajectory-level information is kept here. 
         # Necessary for plotting successor representations.
         self.psi_dense = np.zeros((n_states, n_acts, n_states))
@@ -77,7 +78,50 @@ class SRTabular:
 
 
 class SROffPolicy(SRTabular):
-    pass
+
+    def __init__(self, n_states, n_acts, rb: ReplayBuffer, step_size, disc_fact, obs_to_ind, act_to_ind):
+        super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind)
+        self.rb: ReplayBuffer = rb
+        self.trajectory = []
+        self.done = False
+    
+    def store_trnsition(self, obs: np.ndarray, next_obs: np.ndarray, action: np.ndarray, reward: np.ndarray, terminated: bool, truncated: bool) -> None:
+        transition = Batch(obs=obs, act=action, obs_next=next_obs, rew=reward, terminated=terminated, truncated=truncated)
+        self.rb.add(transition)
+    
+    def update(self, batch_size:int=0):
+        batch, _ = self.rb.sample(batch_size=batch_size)
+        if len(batch) < 1:
+            return
+        
+        i = 0
+        while i < len(batch):
+            transition = batch[i]
+            obs_ind, action_ind, next_obs_ind = self._transition_to_dense_index(
+                obs=transition.obs,
+                action=transition.act,
+                next_obs=transition.obs_next
+            )
+            # TODO: Figure out how psi sparse should look here!
+            # Actions needed to update sparse representation. See (Barreto et al., 2018) Equation (3).
+            one_hot_index = self._dense_index_to_one_hot_index(obs_ind=obs_ind, action_ind=action_ind, next_obs_ind=next_obs_ind)
+            phi_t = self.one_hot_index_to_vector(one_hot_index=one_hot_index)
+            # TODO: Once you have a real non-random policy replace average operator with proper expectation from Equation (3).
+            expect_pi = np.average(self.psi_sparse[next_obs_ind, :, :])
+            self.psi_sparse[obs_ind, action_ind, :] = phi_t + self.disc_fact*expect_pi
+
+            # Actions needed to update the dense representation. See (Machado et al., 2021) Equation (8) and Algorithm 1.
+            for i in range(self.n_states):
+                td_error = 1 if obs_ind == i else 0
+                # TODO: Once the policy is not random any more implement the expectation under the policy instead of np.average
+                td_error += self.disc_fact*np.average(self.psi_dense[next_obs_ind, :, i]) - self.psi_dense[obs_ind, action_ind, i]
+                self.psi_dense[obs_ind, action_ind, i] += self.step_size*td_error
+                
+            i+=1
+            # If the next transition leads to the terminal state, 
+            # we move the buffer index to the first step of the next episode
+            if transition.terminated is True:
+                i+=1
 
 
 class SROnPolicy(SRTabular):
@@ -99,13 +143,14 @@ class SROnPolicy(SRTabular):
         
         psi_trajectory = self.one_hot_index_to_vector(one_hot_index=None)
         for t in range(len(self.trajectory)-1, 0, -1):
-            # Actions needed to update the sparse representation
+            # Actions needed to update the sparse representation. See (Barreto et al., 2018) Equation (3).
             transition_t = self.trajectory[t]
             obs_t, action_t, next_obs_t = self._transition_to_dense_index(
                 obs=transition_t.obs,
                 action=transition_t.act,
                 next_obs=transition_t.obs_next
             )
+            # TODO: This needs to be changed to aling with your new understanding of psi_sparse!
             one_hot_index_t = self._dense_index_to_one_hot_index(obs_ind=obs_t, action_ind=action_t, next_obs_ind=next_obs_t)
             phi_t = self.one_hot_index_to_vector(one_hot_index=one_hot_index_t)
             psi_trajectory += self.disc_fact**t * phi_t
@@ -113,7 +158,7 @@ class SROnPolicy(SRTabular):
             psis = np.array(self.psis)
             self.psi_sparse = np.average(psis, axis=0)
 
-            # Actions needed to update the dense representation
+            # Actions needed to update the dense representation. See your notebook.
             for i in range(t, 0, -1):
                 transition_i = self.trajectory[i]
                 _, _, next_obs_i = self._transition_to_dense_index(

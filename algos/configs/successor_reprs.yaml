@@ -9,10 +9,10 @@ grid:
   - ['W', ' ', ' ', ' ', ' ', ' ', 'W', 'W', 'W', 'W', ' ', ' ', 'W']
   - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-n_episodes: 10
+n_episodes: 100
 max_steps: 100
 slip_chance: 0.25
-buffer_size: 10000
+buffer_size: 200
 seed: 1
 
 # States of interest for visualisations
@@ -26,7 +26,7 @@ states:
 
 
 # Algorithm hyper-parameters
-step_size: 0.01 #alpha
+step_size: 0.5 #alpha
 disc_fact: 0.9 #gamma
-batch_size: 16
-algo_type: 'on_policy' # in ['off_policy', 'on_policy']
+batch_size: 64
+algo_type: 'off_policy' # in ['off_policy', 'on_policy']
