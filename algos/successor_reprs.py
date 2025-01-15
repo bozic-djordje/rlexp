@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from gymnasium import Env
 import numpy as np
@@ -10,7 +11,7 @@ from tianshou.data.buffer.base import ReplayBuffer, Batch
 # 1. Barreto, André, Will Dabney, Rémi Munos, Jonathan J. Hunt, Tom Schaul, Hado van Hasselt, and David Silver. “Successor Features for Transfer in Reinforcement Learning.” arXiv, April 12, 2018. http://arxiv.org/abs/1606.05312.
 # 2. Machado, Marlos C, Andre Barreto, Doina Precup, and Michael Bowling. “Temporal Abstraction in Reinforcement Learning with the Successor Representation,” n.d.
 
-class SRTabular:
+class SFTabular:
     def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_ind: Callable, act_to_ind: Callable) -> None:
         
         # These functions are needed to convert observations and actions to their indexes in the Psi table. 
@@ -23,12 +24,12 @@ class SRTabular:
         self.step_size = step_size
         self.disc_fact = disc_fact
 
-        # psi^\pi(s,a) from (Barreto et al., 2018) Eq. (4)
-        # 3D tensor corresponding to all possible transitions \in R^{|S|x|A|x|S|^2|A|}
+        # psi_sparse is a 3D tensor storing all possible psi^\pi(s,a) from (Barreto et al., 2018)
+        # To get psi^\pi(s,a) index psi_sparse[s,a,:]
         # psi_sparse(s,a) \in R^{|S|^2A}
         self.psi_sparse = np.zeros((n_states, n_acts, n_states**2 * n_acts))
-        # 3D tensor counting all possible transitions. Compared to self.psi_sparse, trajectory-level information is kept here. 
-        # Necessary for plotting successor representations.
+        # psi_dense 3D tensor counting all possible transitions. It represents a modified version of 
+        # \Psi from (Machado et al., 2021) that stores which action was taken in s.
         self.psi_dense = np.zeros((n_states, n_acts, n_states))
     
     # Psi from (Machado et al., 2021)
@@ -37,7 +38,7 @@ class SRTabular:
         return np.sum(self.psi_dense, axis=1)
 
     def _transition_to_dense_index(self, obs: np.ndarray, action:np.ndarray, next_obs:np.ndarray) -> Tuple[int]:
-        return self._obs_to_ind(obs), self._act_to_ind(action), self._obs_to_ind(next_obs)
+        return self._obs_to_ind(obs), self._act_to_ind(int(action)), self._obs_to_ind(next_obs)
     
     def _transition_to_one_hot_index(self, obs: np.ndarray, action:np.ndarray, next_obs:np.ndarray) -> int:
         obs_ind, action_ind, next_obs_ind = self._transition_to_dense_index(obs=obs, action=action, next_obs=next_obs)
@@ -77,7 +78,7 @@ class SRTabular:
         pass
 
 
-class SROffPolicy(SRTabular):
+class SFOffPolicy(SFTabular):
 
     def __init__(self, n_states, n_acts, rb: ReplayBuffer, step_size, disc_fact, obs_to_ind, act_to_ind):
         super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind)
@@ -124,12 +125,12 @@ class SROffPolicy(SRTabular):
                 i+=1
 
 
-class SROnPolicy(SRTabular):
+class SFOnPolicy(SFTabular):
     def __init__(self, n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind):
         super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind)
         self.trajectory = []
         self.done = False
-        self.psis = []
+        self.psi_sa_rollouts = defaultdict(list)
     
     def store_trnsition(self, obs: np.ndarray, next_obs: np.ndarray, action: np.ndarray, reward: np.ndarray, terminated: bool, truncated: bool) -> None:
         transition = Batch(obs=obs, act=action, obs_next=next_obs, rew=reward, terminated=terminated, truncated=truncated)
@@ -141,22 +142,35 @@ class SROnPolicy(SRTabular):
         if self.done is False:
             return
         
-        psi_trajectory = self.one_hot_index_to_vector(one_hot_index=None)
+        
         for t in range(len(self.trajectory)-1, 0, -1):
-            # Actions needed to update the sparse representation. See (Barreto et al., 2018) Equation (3).
+
             transition_t = self.trajectory[t]
             obs_t, action_t, next_obs_t = self._transition_to_dense_index(
                 obs=transition_t.obs,
                 action=transition_t.act,
                 next_obs=transition_t.obs_next
             )
-            # TODO: This needs to be changed to aling with your new understanding of psi_sparse!
-            one_hot_index_t = self._dense_index_to_one_hot_index(obs_ind=obs_t, action_ind=action_t, next_obs_ind=next_obs_t)
-            phi_t = self.one_hot_index_to_vector(one_hot_index=one_hot_index_t)
-            psi_trajectory += self.disc_fact**t * phi_t
-            self.psis.append(psi_trajectory)
-            psis = np.array(self.psis)
-            self.psi_sparse = np.average(psis, axis=0)
+
+            psi_sa = self.one_hot_index_to_vector(one_hot_index=None)
+            # See (Barreto et al., 2018) Equation (3). For i=t to end of trajectory we compute the sum 
+            # over discounted \phi_i and store it into psi_sa.
+            for i in range(t, len(self.trajectory)):
+                transition_i = self.trajectory[i]
+                obs_i, action_i, next_obs_i = self._transition_to_dense_index(
+                    obs=transition_i.obs,
+                    action=transition_i.act,
+                    next_obs=transition_i.obs_next
+                )
+
+                # See (Barreto et al., 2018) Equation (3).
+                one_hot_index_i = self._dense_index_to_one_hot_index(obs_ind=obs_i, action_ind=action_i, next_obs_ind=next_obs_i)
+                phi_i = self.one_hot_index_to_vector(one_hot_index=one_hot_index_i)
+                psi_sa += self.disc_fact**(i-t) * phi_i
+                
+            self.psi_sa_rollouts[(obs_t, action_t)].append(psi_sa.tolist())
+            psis = np.array(self.psi_sa_rollouts[(obs_t, action_t)])
+            self.psi_sparse[obs_t, action_t, :] = np.average(psis, axis=0)
 
             # Actions needed to update the dense representation. See your notebook.
             for i in range(t, 0, -1):
@@ -173,7 +187,7 @@ class SROnPolicy(SRTabular):
         self.done = False
 
 
-def train_loop(env: Env, agent: SRTabular, hparams: Dict) -> None:
+def train_loop(env: Env, agent: SFTabular, hparams: Dict) -> None:
     for _ in tqdm(range(hparams['n_episodes'])):
         obs, _ = env.reset()
         done = False
@@ -231,7 +245,7 @@ if __name__ == '__main__':
     rb = ReplayBuffer(size=hparams['buffer_size'])
     
     if hparams['algo_type'] == 'on_policy':
-        agent = SROnPolicy(
+        agent = SFOnPolicy(
             n_states=env.n_states, 
             n_acts=env.action_space.n,
             step_size=hparams['step_size'], 
@@ -240,7 +254,7 @@ if __name__ == '__main__':
             act_to_ind=env.act_to_id
         )
     elif hparams['algo_type'] == 'off_policy':
-        agent = SROffPolicy(
+        agent = SFOffPolicy(
             n_states=env.n_states, 
             n_acts=env.action_space.n,
             rb=rb, 
