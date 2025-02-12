@@ -66,31 +66,59 @@ class Gridworld(gym.Env):
             y = self.rng.integers(1, self.grid_shape[1])
         return x, y
     
-    def obs_to_id(self, observation: np.ndarray) -> int:
-        """Generates unique index for each observation. Useful for tabular agent methods.
-        Args:
-            observation (np.ndarray): Environment observation
-
-        Returns:
-            int: Unique id of the observation.
+    def obs_to_ids(self, observations: np.ndarray) -> np.ndarray:
         """
-        return observation[0]*self.observation_space.high[1] + observation[1]
-    
-    def id_to_obs(self, obs_id: int) -> np.ndarray:
-        """Reverses unique id back to observation. 
+        Generates unique indices for a batch of observations or a single observation.
         Args:
-            observation_id (int): Unique id of the observation
-
+            observations (np.ndarray): Environment observation(s).
+                - Shape (2,) for a single observation.
+                - Shape (N, 2) for a batch of observations.
         Returns:
-            np.ndarray: The original observation [x, y]
+            np.ndarray: Array of unique IDs shape (N,)
         """
-        y = obs_id % self.observation_space.high[1]
-        x = obs_id // self.observation_space.high[1]
-        return np.array([x, y])
-
+        # Ensure observations are at least (1,2) shape
+        if observations.ndim == 1:
+            observations = np.expand_dims(observations, axis=0)  # Convert (2,) -> (1,2)
+        
+        obs_ids = (observations[:, 0] * self.observation_space.high[1] + observations[:, 1]).astype(int)
+        return obs_ids
     
-    def act_to_id(self, action: int) -> int:
-        return action
+    def ids_to_obs(self, obs_ids: np.ndarray) -> np.ndarray:
+        """
+        Converts unique observation IDs back to observations.
+        Args:
+            obs_ids (np.ndarray or int): Unique observation ID(s).
+                - Shape (N,) for a batch of IDs.
+                - Shape (1,) or a plain int for a single ID.
+        Returns:
+            np.ndarray: Array of observations of shape (N, 2).
+        """
+        if np.isscalar(obs_ids) or (isinstance(obs_ids, np.ndarray) and obs_ids.shape == (1,)):
+            obs_ids = np.array([obs_ids])  # Ensure it's an array of shape (1,)
+
+        y = (obs_ids % self.observation_space.high[1]).astype(int)
+        x = (obs_ids // self.observation_space.high[1]).astype(int)
+        observations = np.stack((x, y), axis=1)
+
+        return observations
+    
+    def acts_to_ids(self, actions: np.ndarray) -> np.ndarray:
+        """
+        Converts actions to their corresponding IDs, handling both single and batch inputs.
+        Args:
+            actions (np.ndarray or int): Action(s).
+                - A single action as an int or an array of shape (1,).
+                - A batch of actions as an array of shape (N,).
+        Returns:
+            np.ndarray or int: Action ID(s).
+                - Returns an int if the input was a single action.
+                - Returns an array of shape (N,) if the input was a batch.
+        """
+        if np.isscalar(actions) or (isinstance(actions, np.ndarray) and actions.shape == (1,)):
+            actions = np.array([actions])  # Ensure it's an array of shape (1,)
+
+        action_ids = actions.astype(int)
+        return action_ids
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """ Reset the environment and return the initial state number
@@ -184,6 +212,7 @@ if __name__ == '__main__':
     
     env = Gridworld(
         grid=hparams['grid'], 
+        start_pos=tuple(hparams['start_pos']),
         store_path=store_path, 
         max_steps=hparams['max_steps'],
         seed=hparams['seed']
