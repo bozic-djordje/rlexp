@@ -10,6 +10,7 @@ grid:
   - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
 slip_chance: 0.25
+start_pos: [4, 7]
 n_episodes: 10
 max_steps: 100
 seed: 1
