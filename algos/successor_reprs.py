@@ -1,19 +1,20 @@
 from abc import abstractmethod
 from collections import defaultdict
-from typing import Union, Callable, Dict, List, Optional, Tuple
+from typing import Union, Callable, Dict, Tuple
 from gymnasium import Env
 import numpy as np
 import torch
-from tqdm import tqdm
-from envs.gridworld.gridworld import Gridworld
 from tianshou.data.buffer.base import ReplayBuffer, Batch
+from envs.gridworld.gridworld import Gridworld
+from common import Agent, train_loop
 
 # This file implements the code from:
 # 1. Barreto, André, Will Dabney, Rémi Munos, Jonathan J. Hunt, Tom Schaul, Hado van Hasselt, and David Silver. “Successor Features for Transfer in Reinforcement Learning.” arXiv, April 12, 2018. http://arxiv.org/abs/1606.05312.
 # 2. Machado, Marlos C, Andre Barreto, Doina Precup, and Michael Bowling. “Temporal Abstraction in Reinforcement Learning with the Successor Representation,” n.d.
 
-class SFTabular:
+class SFTabular(Agent):
     def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable) -> None:
+        super().__init__()
         self._obs_to_inds: Callable = obs_to_inds
         self._acts_to_inds: Callable = acts_to_inds
 
@@ -188,32 +189,6 @@ class SFOnPolicy(SFTabular):
         self.trajectory = []
         self.done = False
 
-def train_loop(env: Env, agent: SFTabular, hparams: Dict) -> None:
-    for _ in tqdm(range(hparams['n_episodes'])):
-        obs, _ = env.reset()
-        done = False
-
-        while not done:
-            action = env.action_space.sample()
-            next_obs, reward, terminated, truncated, _ = env.step(action)
-            agent.store_transition(
-                obs=obs, 
-                next_obs=next_obs,
-                action=action, 
-                reward=reward, 
-                terminated=terminated, 
-                truncated=truncated
-            )
-            if hparams['algo_type'] == 'off_policy':
-                agent.update(batch_size=hparams['batch_size'])
-            
-            # update if the environment is done and the current obs
-            done = terminated or truncated
-            obs = next_obs
-        
-        # On-policy psi update
-        if hparams['algo_type'] == 'on_policy':
-            agent.update()
 
 def plot_Psi(env: Env, weights_path: str, weights_keys:Tuple, states: Dict, name_prefix: str) -> None:
     psi_tables = torch.load(weights_path)
