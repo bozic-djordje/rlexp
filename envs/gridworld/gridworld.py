@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple
 import os
 import numpy as np
+import torch
 import gymnasium as gym
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -66,59 +67,77 @@ class Gridworld(gym.Env):
             y = self.rng.integers(1, self.grid_shape[1])
         return x, y
     
-    def obs_to_ids(self, observations: np.ndarray) -> np.ndarray:
+    def obs_to_ids(self, observations):
         """
-        Generates unique indices for a batch of observations or a single observation.
+        Generates unique indices for a batch of observations or a single observation,
+        supporting both NumPy arrays and PyTorch tensors.
         Args:
-            observations (np.ndarray): Environment observation(s).
+            observations (np.ndarray or torch.Tensor): Environment observation(s).
                 - Shape (2,) for a single observation.
                 - Shape (N, 2) for a batch of observations.
         Returns:
-            np.ndarray: Array of unique IDs shape (N,)
+            np.ndarray or torch.Tensor: Array of unique IDs (shape (N,)).
         """
+        is_tensor = torch.is_tensor(observations)  # Check if input is a torch tensor
+        
         # Ensure observations are at least (1,2) shape
         if observations.ndim == 1:
-            observations = np.expand_dims(observations, axis=0)  # Convert (2,) -> (1,2)
-        
-        obs_ids = (observations[:, 0] * self.observation_space.high[1] + observations[:, 1]).astype(int)
-        return obs_ids
+            observations = observations.unsqueeze(0) if is_tensor else np.expand_dims(observations, axis=0)
+
+        obs_ids = observations[:, 0] * self.observation_space.high[1] + observations[:, 1]
+
+        # Convert result to int type
+        return obs_ids.int() if is_tensor else obs_ids.astype(int)
     
-    def ids_to_obs(self, obs_ids: np.ndarray) -> np.ndarray:
+    def ids_to_obs(self, obs_ids):
         """
-        Converts unique observation IDs back to observations.
+        Converts unique observation IDs back to observations, supporting both NumPy arrays and PyTorch tensors.
         Args:
-            obs_ids (np.ndarray or int): Unique observation ID(s).
+            obs_ids (np.ndarray, torch.Tensor, or int): Unique observation ID(s).
                 - Shape (N,) for a batch of IDs.
                 - Shape (1,) or a plain int for a single ID.
         Returns:
-            np.ndarray: Array of observations of shape (N, 2).
+            np.ndarray or torch.Tensor: Array of observations (shape (N,2)), or (2,) for a single observation.
         """
-        if np.isscalar(obs_ids) or (isinstance(obs_ids, np.ndarray) and obs_ids.shape == (1,)):
-            obs_ids = np.array([obs_ids])  # Ensure it's an array of shape (1,)
+        is_tensor = torch.is_tensor(obs_ids)  # Check if input is a PyTorch tensor
 
-        y = (obs_ids % self.observation_space.high[1]).astype(int)
-        x = (obs_ids // self.observation_space.high[1]).astype(int)
-        observations = np.stack((x, y), axis=1)
+        # Convert scalar or (1,) shape to batch
+        if np.isscalar(obs_ids) or (is_tensor and obs_ids.numel() == 1) or (not is_tensor and isinstance(obs_ids, np.ndarray) and obs_ids.shape == (1,)):
+            obs_ids = torch.tensor([obs_ids]) if is_tensor else np.array([obs_ids])
 
-        return observations
+        # Compute x and y coordinates
+        y = obs_ids % self.observation_space.high[1]
+        x = obs_ids // self.observation_space.high[1]
+
+        # Stack results
+        observations = torch.stack((x, y), dim=1) if is_tensor else np.stack((x, y), axis=1)
+
+        # Return single observation as (2,) instead of (1,2)
+        return observations[0] if observations.shape[0] == 1 else observations
     
-    def acts_to_ids(self, actions: np.ndarray) -> np.ndarray:
+    def acts_to_ids(self, actions):
         """
         Converts actions to their corresponding IDs, handling both single and batch inputs.
         Args:
-            actions (np.ndarray or int): Action(s).
+            actions (np.ndarray, torch.Tensor, or int): Action(s).
                 - A single action as an int or an array of shape (1,).
                 - A batch of actions as an array of shape (N,).
         Returns:
-            np.ndarray or int: Action ID(s).
+            np.ndarray, torch.Tensor, or int: Action ID(s).
                 - Returns an int if the input was a single action.
                 - Returns an array of shape (N,) if the input was a batch.
         """
-        if np.isscalar(actions) or (isinstance(actions, np.ndarray) and actions.shape == (1,)):
-            actions = np.array([actions])  # Ensure it's an array of shape (1,)
+        is_tensor = torch.is_tensor(actions)  # Check if input is a PyTorch tensor
 
-        action_ids = actions.astype(int)
-        return action_ids
+        # Convert scalar or (1,) shape to batch
+        if np.isscalar(actions) or (is_tensor and actions.numel() == 1) or (not is_tensor and isinstance(actions, np.ndarray) and actions.shape == (1,)):
+            actions = torch.tensor([actions]) if is_tensor else np.array([actions])
+
+        # Convert to int type
+        action_ids = actions.int() if is_tensor else actions.astype(int)
+
+        # Return single action as a scalar
+        return action_ids[0] if action_ids.shape[0] == 1 else action_ids
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """ Reset the environment and return the initial state number
