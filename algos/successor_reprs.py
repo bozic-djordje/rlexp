@@ -13,9 +13,9 @@ from tianshou.data.buffer.base import ReplayBuffer, Batch
 # 2. Machado, Marlos C, Andre Barreto, Doina Precup, and Michael Bowling. “Temporal Abstraction in Reinforcement Learning with the Successor Representation,” n.d.
 
 class SFTabular:
-    def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_ind: Callable, act_to_ind: Callable) -> None:
-        self._obs_to_ind: Callable = obs_to_ind
-        self._act_to_ind: Callable = act_to_ind
+    def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable) -> None:
+        self._obs_to_inds: Callable = obs_to_inds
+        self._acts_to_inds: Callable = acts_to_inds
 
         self.n_states = n_states
         self.n_acts = n_acts
@@ -30,7 +30,7 @@ class SFTabular:
         return torch.sum(self.psi_dense, dim=1)
 
     def _transition_to_dense_index(self, obs: torch.Tensor, action: torch.Tensor, next_obs: torch.Tensor) -> Tuple[int]:
-        return self._obs_to_ind(obs), self._act_to_ind(int(action)), self._obs_to_ind(next_obs)
+        return self._obs_to_inds(obs).item(), self._acts_to_inds(int(action)).item(), self._obs_to_inds(next_obs).item()
     
     def _transition_to_one_hot_index(self, obs: torch.Tensor, action: torch.Tensor, next_obs: torch.Tensor) -> int:
         obs_ind, action_ind, next_obs_ind = self._transition_to_dense_index(obs=obs, action=action, next_obs=next_obs)
@@ -220,7 +220,7 @@ def plot_Psi(env: Env, weights_path: str, weights_keys:Tuple, states: Dict, name
     Psi = psi_tables[weights_keys[2]]
 
     for state_id, state_obs in states.items():
-        psi_s = Psi[env.obs_to_id(observation=state_obs), :]
+        psi_s = Psi[env.obs_to_ids(observations=np.array(state_obs)), :]
         psi_s = psi_s.reshape(env.grid_shape)
         env.plot_values(table=psi_s, plot_name=f'{name_prefix}_{state_id}')
 
@@ -251,8 +251,8 @@ if __name__ == '__main__':
             n_acts=env.action_space.n,
             step_size=hparams['step_size'], 
             disc_fact=hparams['disc_fact'],
-            obs_to_ind=env.obs_to_id,
-            act_to_ind=env.act_to_id
+            obs_to_ind=env.obs_to_ids,
+            act_to_ind=env.acts_to_ids
         )
     elif hparams['algo_type'] == 'off_policy':
         agent = SFOffPolicy(
@@ -261,8 +261,8 @@ if __name__ == '__main__':
             rb=rb, 
             step_size=hparams['step_size'], 
             disc_fact=hparams['disc_fact'],
-            obs_to_ind=env.obs_to_id,
-            act_to_ind=env.act_to_id
+            obs_to_ind=env.obs_to_ids,
+            act_to_ind=env.acts_to_ids
         )
     else:
         raise ValueError('Parameter algo_type not supported!')
