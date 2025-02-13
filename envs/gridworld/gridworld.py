@@ -159,6 +159,8 @@ class Gridworld(gym.Env):
             - 2: go left
             - 3: go right
         """
+        if isinstance(action, torch.Tensor) or isinstance(action, np.ndarray):
+            action = action.item()
         assert(action >= 0)
         assert(action <= 3)
         
