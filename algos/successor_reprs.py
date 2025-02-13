@@ -164,7 +164,7 @@ class SFOnPolicy(SFTabular):
 
 
 def plot_Psi(env: Env, weights_path: str, weights_keys:Tuple, states: Dict, name_prefix: str) -> None:
-    psi_tables = torch.load(weights_path)
+    psi_tables = torch.load(weights_path, weights_only=False)
     Psi = psi_tables[weights_keys[2]]
 
     for state_id, state_obs in states.items():
@@ -188,7 +188,8 @@ if __name__ == '__main__':
         grid=hparams['grid'],
         store_path=store_path, 
         max_steps=hparams['max_steps'], 
-        seed=hparams['seed']
+        seed=hparams['seed'],
+        start_pos=hparams['start_pos']
     )
 
     rb = ReplayBuffer(size=hparams['buffer_size'])
@@ -218,7 +219,8 @@ if __name__ == '__main__':
     _ = train_loop(
         env=env,
         agent=agent,
-        hparams=hparams
+        hparams=hparams,
+        random=True
     )
     weights_path = os.path.join(store_path, f'{hparams["algo_type"]}_psi.pt')
     weights_keys = agent.store_weights(path=weights_path)
