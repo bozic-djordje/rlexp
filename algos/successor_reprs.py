@@ -23,7 +23,9 @@ class SFTabular(Agent):
         self.step_size = step_size
         self.disc_fact = disc_fact
 
+        # TODO: Currently unverified.
         self.psi_sparse = torch.zeros((n_states, n_acts, n_states**2 * n_acts))
+        # Verified.
         self.psi_dense = torch.zeros((n_states, n_acts, n_states))
 
     @property
@@ -87,12 +89,17 @@ class SFOffPolicy(SFTabular):
                 action=transition.act,
                 next_obs=transition.obs_next
             )
+            # See (Barreto et al., 2018) Equation (3).
             one_hot_index = self._dense_index_to_one_hot_index(obs_ind=obs_ind, action_ind=action_ind, next_obs_ind=next_obs_ind)
             phi_t = self.one_hot_index_to_vector(one_hot_index=one_hot_index)
-            expect_pi = torch.mean(self.psi_sparse[next_obs_ind, :, :], dim=0)
+            # TODO: Check if this is correct.
+            next_action = self.select_action(obs=transition.obs_next)
+            next_action_ind = self._acts_to_inds(next_action)
+            expect_pi = torch.mean(self.psi_sparse[next_obs_ind, next_action_ind, :], dim=0)
             self.psi_sparse[obs_ind, action_ind, :] = phi_t + self.disc_fact * expect_pi
 
             for i in range(self.n_states):
+                # See (Machado et al., 2021) Equation (8) and Algorithm 1.
                 td_error = 1 if obs_ind == i else 0
                 td_error += self.disc_fact * torch.mean(self.psi_dense[next_obs_ind, :, i]) - self.psi_dense[obs_ind, action_ind, i]
                 self.psi_dense[obs_ind, action_ind, i] += self.step_size * td_error
