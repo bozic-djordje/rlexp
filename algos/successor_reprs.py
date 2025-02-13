@@ -1,9 +1,10 @@
 from abc import abstractmethod
 from collections import defaultdict
-from typing import Union, Callable, Dict, Tuple
+from typing import Optional, Union, Callable, Dict, Tuple
 from gymnasium import Env
 import numpy as np
 import torch
+from torch import nn
 from tianshou.data.buffer.base import ReplayBuffer, Batch
 from envs.gridworld.gridworld import Gridworld
 from common import Agent, train_loop
@@ -13,20 +14,26 @@ from common import Agent, train_loop
 # 2. Machado, Marlos C, Andre Barreto, Doina Precup, and Michael Bowling. “Temporal Abstraction in Reinforcement Learning with the Successor Representation,” n.d.
 
 class SFTabular(Agent):
-    def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable) -> None:
+    def __init__(self, n_states: int, n_acts: int, step_size: float, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable, device, d:Optional[int]=None) -> None:
         super().__init__()
         self._obs_to_inds: Callable = obs_to_inds
         self._acts_to_inds: Callable = acts_to_inds
+        self.device = device
 
         self.n_states = n_states
         self.n_acts = n_acts
+        # See Barreto et al. 2013
+        if d is None:
+            self.d = (n_states**2 * n_acts).item()
+        else:
+            self.d = d
         self.step_size = step_size
         self.disc_fact = disc_fact
 
         # TODO: Currently unverified.
-        self.psi_sparse = torch.zeros((n_states, n_acts, n_states**2 * n_acts))
+        self.psi_sparse = torch.zeros((n_states, n_acts, self.d), device=self.device)
         # Verified.
-        self.psi_dense = torch.zeros((n_states, n_acts, n_states))
+        self.psi_dense = torch.zeros((n_states, n_acts, n_states), device=self.device)
 
     @property
     def Psi(self):
@@ -51,7 +58,7 @@ class SFTabular(Agent):
         return obs_ind, act_ind, next_obs_ind
     
     def one_hot_index_to_vector(self, one_hot_index: int = None) -> torch.Tensor:
-        one_hot_vec = torch.zeros(self.n_states**2 * self.n_acts)
+        one_hot_vec = torch.zeros(self.n_states**2 * self.n_acts, device=self.device)
         if one_hot_index is not None:
             one_hot_vec[one_hot_index] = 1
         return one_hot_vec
@@ -66,7 +73,7 @@ class SFTabular(Agent):
 
 class SFOffPolicy(SFTabular):
     def __init__(self, n_states, n_acts, rb: ReplayBuffer, step_size, disc_fact, obs_to_ind, act_to_ind):
-        super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind)
+        super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind, device="cpu")
         self.rb: ReplayBuffer = rb
         self.trajectory = []
         self.done = False
@@ -111,7 +118,7 @@ class SFOffPolicy(SFTabular):
 
 class SFOnPolicy(SFTabular):
     def __init__(self, n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind):
-        super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind)
+        super().__init__(n_states, n_acts, step_size, disc_fact, obs_to_ind, act_to_ind, device="cpu")
         self.trajectory = []
         self.done = False
         self.psi_sa_rollouts = defaultdict(list)

@@ -76,7 +76,7 @@ def train_loop(env: Env, agent: Agent, hparams: Dict, random=False) -> None:
                 terminated=terminated, 
                 truncated=truncated
             )
-            if hparams['algo_type'] == 'off_policy':
+            if hparams['algo_type'] == 'off_policy' or hparams['algo_type'] == 'sfqlearning':
                 agent.update(batch_size=hparams['batch_size'])
             
             # update if the environment is done and the current obs
