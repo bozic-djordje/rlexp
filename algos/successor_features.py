@@ -37,6 +37,8 @@ class SFQTabular(TabularAgent):
         self.w = torch.rand(size=(self.d, 1), requires_grad=True, device=self.device)
         # Initialise weights to some small random values
         self.w.data *= 0.001
+        
+        self.weight_keys = ['psi', 'w', 'q_table', 'v_table']
 
         self.loss_fn = nn.MSELoss()
         self.optim = torch.optim.SGD([self.w], lr=params["step_size"])
@@ -56,6 +58,20 @@ class SFQTabular(TabularAgent):
     def v_table(self) -> torch.Tensor:
         return torch.mean(self.q_table, axis=1).reshape(env.grid_shape)
 
+    @property
+    def psi_ss(self) -> torch.Tensor:
+        psi_s = torch.sum(self.psi, dim=1)
+        psi_ss = torch.zeros((self.n_states, self.n_states), device=self.device)
+
+        for s_from_ind in range(self.n_states):
+            # psi_sparse \in R^d -- all transitions that ocurred after state s_from_ind. 
+            # We want to sum up all the time we ended up in some state s_to.
+            psi_sparse = psi_s[s_from_ind, :]
+            for one_hot_index in range(self.d):
+                _, _, s_to_ind = self._one_hot_index_to_dense_index(one_hot_index=one_hot_index)
+                psi_ss[s_from_ind, s_to_ind] += psi_sparse[one_hot_index]
+        return psi_ss
+    
     def store_transition(self, obs:Union[torch.Tensor, np.ndarray], next_obs:Union[torch.Tensor, np.ndarray], action:Union[torch.Tensor, np.ndarray], reward:Union[torch.Tensor, np.ndarray], terminated: bool, truncated: bool) -> None:
         obs, next_obs, action, reward, terminated, truncated = super().store_transition(obs, next_obs, action, reward, terminated, truncated)
         transition = Batch(obs=obs, act=action, obs_next=next_obs, rew=reward, terminated=terminated, truncated=truncated)
@@ -71,15 +87,15 @@ class SFQTabular(TabularAgent):
         return act_ind
 
     def select_action(self, obs: torch.Tensor, update:bool=True) -> int:
-        self.epsilon = self.epsilon_scheduler.step()
-        self.history["epsilon"].append(self.epsilon)
+        if update:
+            self.epsilon = self.epsilon_scheduler.step()
+            self.history["epsilon"].append(self.epsilon)
+            self.total_steps += 1
 
         if torch.rand(1, generator=self.rng).item() < self.epsilon:
             act_ind = torch.randint(low=0, high=self.n_acts, size=(1,))
         else:
             act_ind = self._select_optimal_action(obs=obs)
-        self.total_steps += 1
-        
         return act_ind
     
     def _update_psi(self, obs_ind:int, action_ind:int, next_obs_ind:int, next_action_ind:int) -> None:
@@ -115,7 +131,7 @@ class SFQTabular(TabularAgent):
                 action=transition.act, 
                 next_obs=transition.obs_next
             )
-            next_action = self._select_optimal_action(obs=transition.obs_next)
+            next_action = self.select_action(obs=transition.obs_next, update=False)
             next_action_ind = self._acts_to_inds(next_action)
             
             # Update \Psi(s,a) according to Barreto et al. 2018, Eq. (4)
@@ -134,30 +150,37 @@ class SFQTabular(TabularAgent):
                 i += 1
     
     def store_weights(self, path: str) -> Tuple:
-        torch.save({'psi': self.psi.cpu(), 'q_table': self.q_table.cpu(), 'v_table': self.v_table.cpu()}, path)
-        return 'psi', 'q_table', 'v_table'
-
-
-def plot_V(env: Env, weights_path: str, weights_keys:Tuple, name_prefix: str) -> None:
-    v_table = torch.load(weights_path, weights_only=False)[weights_keys[2]]
-    env.plot_values(table=v_table, plot_name=name_prefix)
+        torch.save({'psi': self.psi.cpu(), 'w': self.w.cpu(), 'q_table': self.q_table.cpu(), 'v_table': self.v_table.cpu()}, path)
+        return self.weight_keys
+    
+    def load_weights(self, path:str) -> None:
+        weights = torch.load(weights_path, weights_only=False)
+        self.psi = weights[self.weight_keys[0]].to(self.device)
+        self.w = weights[self.weight_keys[1]].to(self.device)
+        return self.weight_keys
 
 
 if __name__ == '__main__':
     import os
     from utils import setup_artefact_paths
     from plotting import plot_scalar
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Script with a rerun flag")
+    parser.add_argument("--rerun", action="store_true", default=True, help="Set to rerun the training process (default: True)")
+    args = parser.parse_args()
+    to_rerun = args.rerun
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     script_path = os.path.abspath(__file__)
     store_path, yaml_path = setup_artefact_paths(script_path=script_path)
-    
     import yaml
     with open(yaml_path, 'r') as file:
         hparams = yaml.safe_load(file)
-    
+    weights_path = os.path.join(store_path, f'{hparams["algo_type"]}_weights.pt')
+
     env = Gridworld(
         grid=hparams['grid'],
         store_path=store_path, 
@@ -180,22 +203,29 @@ if __name__ == '__main__':
         acts_to_inds=env.acts_to_ids,
         device=device
     )
-   
-    _ = train_loop(
-        env=env,
-        agent=agent,
-        hparams=hparams,
-        random=False
-    )
-    weights_path = os.path.join(store_path, f'{hparams["algo_type"]}_psi.pt')
-    weights_keys = agent.store_weights(path=weights_path)
     
-    plot_V(
-        env=env,
-        weights_path=weights_path, 
-        weights_keys=weights_keys,
-        name_prefix=f'{hparams["algo_type"]}_vtable'
-    )
+    if to_rerun:
+        _ = train_loop(
+            env=env,
+            agent=agent,
+            hparams=hparams,
+            random=False
+        )
+        weight_keys = agent.store_weights(path=weights_path)
+    else:
+        weight_keys = agent.load_weights(path=weights_path)
+
+    # Plot V table for debugging
+    env.plot_values(table=agent.v_table.cpu(), plot_name=f'{hparams["algo_type"]}_vtable')
+    
+    # Plot Psi(s) table for debugging. See Machado et al. 2021 Algorithm 1
+    psi_ss = agent.psi_ss
+    for state_id, state_obs in hparams["states"].items():
+        # You must get the dense index here!
+        obs_ind = env.obs_to_ids(torch.tensor(state_obs)).item()
+        psi_s = psi_ss[obs_ind, :]
+        psi_s = psi_s.reshape(env.grid_shape).cpu()
+        env.plot_values(table=psi_s, plot_name=f'{hparams["algo_type"]}_state_{state_id}')
     
     loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_loss')
     plot_scalar(
