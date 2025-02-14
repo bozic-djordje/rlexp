@@ -102,7 +102,7 @@ class SFOffPolicy(SFTabular):
             # TODO: Check if this is correct.
             next_action = self.select_action(obs=transition.obs_next)
             next_action_ind = self._acts_to_inds(next_action)
-            expect_pi = torch.mean(self.psi_sparse[next_obs_ind, next_action_ind, :], dim=0)
+            expect_pi = self.psi_sparse[next_obs_ind, next_action_ind, :]
             self.psi_sparse[obs_ind, action_ind, :] = phi_t + self.disc_fact * expect_pi
 
             for i in range(self.n_states):
