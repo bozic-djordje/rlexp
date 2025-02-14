@@ -45,6 +45,10 @@ class Agent:
         pass
 
     @abstractmethod
+    def load_weights():
+        pass
+
+    @abstractmethod
     def select_action(obs: torch.Tensor) -> Any:
         pass
 
