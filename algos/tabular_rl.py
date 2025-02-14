@@ -7,36 +7,32 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from envs.gridworld.gridworld import Gridworld
-from common import Agent, train_loop, Scheduler
+from common import TabularAgent, train_loop, Scheduler
 from tianshou.data.buffer.base import ReplayBuffer, Batch
 
 
-class QLearningTabular(Agent):
-    def __init__(self, n_states: int, action_space: Space, rb: ReplayBuffer, step_size: float, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable, epsilon_scheduler: Scheduler, warmup_steps:int=0, seed:int=None) -> None:
-        super().__init__()
-        self.n_states = n_states
-        self.action_space: Space = action_space
-        self.n_acts = self.action_space.n
+class QLearningTabular(TabularAgent):
+    def __init__(self, params:Dict, rb: ReplayBuffer, obs_to_inds: Callable, acts_to_inds: Callable, epsilon_scheduler: Scheduler) -> None:
+        super().__init__(params=params)
 
-        self.step_size = step_size
-        self.disc_fact = disc_fact
+        self.step_size = params["step_size"]
+        self.disc_fact = params["disc_fact"]
         self.obs_to_inds = obs_to_inds
         self.acts_to_inds = acts_to_inds
 
         self.rb: ReplayBuffer = rb
-        self.warmup_steps = warmup_steps
+        self.warmup_steps = params["warmup_steps"]
         self.total_steps = 0
         
         self.epsilon_scheduler = epsilon_scheduler
         self.epsilon = None
 
         # Q-table initialized with zeros
-        self.q_table = torch.zeros((n_states, self.n_acts))
+        self.q_table = torch.zeros((self.n_states, self.n_acts))
 
         # Seeding random generators for reproducibility
-        if seed is not None:
-            self.action_space.seed(seed=seed)
-            self.rng = torch.Generator().manual_seed(seed)
+        if params["seed"] is not None:
+            self.rng = torch.Generator().manual_seed(params["seed"])
         else:
             self.rng = torch.Generator()
     
@@ -48,8 +44,8 @@ class QLearningTabular(Agent):
     def select_action(self, obs: torch.Tensor) -> int:
         """Epsilon-greedy action selection."""
         self.epsilon = self.epsilon_scheduler.step()
-        if torch.rand(1).item() < self.epsilon:
-            action = torch.tensor(self.action_space.sample())
+        if torch.rand(1, generator=self.rng).item() < self.epsilon:
+            action = torch.randint(low=0, high=self.n_acts, size=(1,))
         else:
             obs_ind = self.obs_to_inds(obs)
             action = torch.argmax(self.q_table[obs_ind])
@@ -85,14 +81,11 @@ class QLearningTabular(Agent):
         return ('q_table', )
     
 
-class MonteCarloTabular:
-    def __init__(self, n_states: int, action_space: Space, disc_fact: float, obs_to_inds: Callable, acts_to_inds: Callable, epsilon_scheduler: Scheduler, warmup_steps:int=0, seed:int=None) -> None:
-        super().__init__()
-        self.n_states = n_states
-        self.action_space: Space = action_space
-        self.n_acts = self.action_space.n
+class MonteCarloTabular(TabularAgent):
+    def __init__(self, params:Dict, obs_to_inds: Callable, acts_to_inds: Callable, epsilon_scheduler: Scheduler) -> None:
+        super().__init__(params=params)
 
-        self.disc_fact = disc_fact
+        self.disc_fact = params["disc_fact"]
         self.obs_to_inds = obs_to_inds
         self.acts_to_inds = acts_to_inds
         
@@ -100,25 +93,24 @@ class MonteCarloTabular:
         self.epsilon = None
 
         # Value table and visit counts
-        self.q_table = torch.zeros((n_states, self.n_acts))
-        self.returns_sum = torch.zeros((n_states, self.n_acts))
-        self.returns_count = torch.zeros((n_states, self.n_acts))
+        self.q_table = torch.zeros((self.n_states, self.n_acts))
+        self.returns_sum = torch.zeros((self.n_states, self.n_acts))
+        self.returns_count = torch.zeros((self.n_states, self.n_acts))
 
         # To store the current episode trajectory
         self.trajectory = []
 
         # Seeding random generators for reproducibility
-        if seed is not None:
-            self.action_space.seed(seed=seed)
-            self.rng = torch.Generator().manual_seed(seed)
+        if params["seed"] is not None:
+            self.rng = torch.Generator().manual_seed(params["seed"])
         else:
             self.rng = torch.Generator()
 
     def select_action(self, obs: torch.Tensor) -> int:
         """Epsilon-greedy action selection."""
         self.epsilon = self.epsilon_scheduler.step()
-        if torch.rand(1).item() < self.epsilon:
-            action = torch.tensor(self.action_space.sample())
+        if torch.rand(1, generator=self.rng).item() < self.epsilon:
+            action = torch.randint(low=0, high=self.n_acts, size=(1,))
         else:
             obs_ind = self.obs_to_inds(obs)
             action = torch.argmax(self.q_table[obs_ind])
@@ -179,27 +171,23 @@ if __name__ == '__main__':
     rb = ReplayBuffer(size=hparams['buffer_size'])
     scheduler = Scheduler(start=hparams['schedule_start'], end=hparams['schedule_end'], decay_func=lambda step: hparams['schedule_decay'] * step)
 
+    hparams["n_states"] = env.n_states
+    hparams["n_acts"] = env.action_space.n
+
     if hparams['algo_type'] == 'on_policy':
         agent = MonteCarloTabular(
-            n_states=env.n_states, 
-            action_space=env.action_space,
-            disc_fact=hparams['disc_fact'],
+            params=hparams,
             obs_to_inds=env.obs_to_ids,
             acts_to_inds=env.acts_to_ids,
-            epsilon_scheduler=scheduler,
-            warmup_steps=hparams['warmup_steps']
+            epsilon_scheduler=scheduler
         )
     elif hparams['algo_type'] == 'off_policy':
         agent = QLearningTabular(
-            n_states=env.n_states, 
-            action_space=env.action_space,
+            params=hparams,
             rb=rb,
-            step_size=hparams['step_size'], 
-            disc_fact=hparams['disc_fact'],
             obs_to_inds=env.obs_to_ids,
             acts_to_inds=env.acts_to_ids,
-            epsilon_scheduler=scheduler,
-            warmup_steps=hparams['warmup_steps']
+            epsilon_scheduler=scheduler
         )
     else:
         raise ValueError('Parameter algo_type not supported!')
