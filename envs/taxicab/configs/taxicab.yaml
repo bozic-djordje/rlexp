@@ -1,3 +1,114 @@
+grid:
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
+  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
+  - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+start_pos: null
 n_episodes: 10
 max_steps: 100
+slip_chance: 0
 seed: 1
+
+# Attributes that should be grounded.
+# Attributes that have a direct representation
+colour: [green, blue, red, yellow]
+building: [hospital, school, library, office]
+size: [big, small]
+fill: [filled, outlined]
+
+# Attributes that don't have direct representation but should be grounded based on their location.
+direction: [west, east, north, south]
+location: [topright, topleft, bottomright, bottomleft]
+
+location_formulation:
+  - colour size fill direction building
+  - colour size direction fill building
+  - colour fill size direction building
+  - colour fill direction size building
+  - colour direction size fill building
+  - colour direction fill size building
+  - size colour fill direction building
+  - size colour direction fill building
+  - size fill colour direction building
+  - size fill direction colour building
+  - size direction colour fill building
+  - size direction fill colour building
+  - fill colour size direction building
+  - fill colour direction size building
+  - fill size colour direction building
+  - fill size direction colour building
+  - fill direction colour size building
+  - fill direction size colour building
+  - direction colour size fill building
+  - direction colour fill size building
+  - direction size colour fill building
+  - direction size fill colour building
+  - direction fill colour size building
+  - direction fill size colour building
+  - building which is size, colour, fill, and is located direction
+  - building which is size, fill, colour, and is located direction
+  - building which is colour, size, fill, and is located direction
+  - building which is colour, fill, size, and is located direction
+  - building which is fill, size, colour, and is located direction
+  - building which is fill, colour, size, and is located direction
+  - location building
+  - building that is at the location corner of the map
+
+passenger_reference:
+  - passenger
+  - traveler
+  - commuter
+  - client
+
+drive_common:
+  - travel
+  - drive
+  - go
+  - commute
+
+goal_formulation:
+  # Passenger first, then goal
+  - drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
+  # Goal first, then passenger
+  - passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
+  # Passenger first, then goal
+  - passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
+  # Goal first, then passenger
+  - a ride was requested to location_formulation. the pickup location is at location_formulation.
+
+# Discrete representations of attributes that have a representation mapping
+colour_map:
+  green: "1"
+  blue: "2"
+  red: "3"
+  yellow: "4"
+
+building_map: 
+  hospital: "1"
+  school: "2"
+  library: "3"
+  office: "4"
+
+size_map:
+  big: "1"
+  small: "2"
+
+fill_map:
+  filled: "1"
+  outlined: "2"
+
+road_map: "0" 
+
+use_color_map: True
+use_building_map: True
+use_size_map: True
+use_fill_map: False
+
+# 8 combinations total with green hospital being fixed
+# green hospitals must not exist in the train or test sets
+hard_test_attributes:
+  colour: green
+  building: hospital
