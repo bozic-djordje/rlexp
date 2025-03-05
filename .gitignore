@@ -82,3 +82,5 @@ __init__.py
 *.trash
 *artefacts
 notes*
+
+!assets/**/*.png
