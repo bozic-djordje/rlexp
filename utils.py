@@ -2,6 +2,13 @@ import os
 import cv2
 import numpy as np
 
+COLOUR_MAP = {
+    "blue": (255, 0, 0),
+    "green": (0, 255, 0),
+    "red": (0, 0, 255),
+    "yellow": (0, 255, 255)
+    }
+
 def setup_artefact_paths(script_path:str, script_name:str=None):
     if script_name is None:
         script_name = os.path.basename(script_path)
