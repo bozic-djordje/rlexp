@@ -21,65 +21,86 @@ building: [hospital, school, library, office]
 size: [big, small]
 fill: [filled, outlined]
 
-# Attributes that don't have direct representation but should be grounded based on their location.
-direction: [west, east, north, south]
-location: [topright, topleft, bottomright, bottomleft]
+# These options aren't implemented.
+# # Attributes that don't have direct representation but should be grounded based on their location.
+# direction: [west, east, north, south]
+# location: [topright, topleft, bottomright, bottomleft]
+
+# location_formulation:
+#   - colour size fill direction building
+#   - colour size fill building
+#   - colour fill size direction building
+#   - colour fill direction size building
+#   - colour direction size fill building
+#   - colour direction fill size building
+#   - size colour fill direction building
+#   - size colour direction fill building
+#   - size fill colour direction building
+#   - size fill direction colour building
+#   - size direction colour fill building
+#   - size direction fill colour building
+#   - fill colour size direction building
+#   - fill colour direction size building
+#   - fill size colour direction building
+#   - fill size direction colour building
+#   - fill direction colour size building
+#   - fill direction size colour building
+#   - direction colour size fill building
+#   - direction colour fill size building
+#   - direction size colour fill building
+#   - direction size fill colour building
+#   - direction fill colour size building
+#   - direction fill size colour building
+#   - building which is size, colour, fill, and is located direction
+#   - building which is size, fill, colour, and is located direction
+#   - building which is colour, size, fill, and is located direction
+#   - building which is colour, fill, size, and is located direction
+#   - building which is fill, size, colour, and is located direction
+#   - building which is fill, colour, size, and is located direction
+#   - location building
+#   - building that is at the location corner of the map
 
 location_formulation:
-  - colour size fill direction building
-  - colour size direction fill building
-  - colour fill size direction building
-  - colour fill direction size building
-  - colour direction size fill building
-  - colour direction fill size building
-  - size colour fill direction building
-  - size colour direction fill building
-  - size fill colour direction building
-  - size fill direction colour building
-  - size direction colour fill building
-  - size direction fill colour building
-  - fill colour size direction building
-  - fill colour direction size building
-  - fill size colour direction building
-  - fill size direction colour building
-  - fill direction colour size building
-  - fill direction size colour building
-  - direction colour size fill building
-  - direction colour fill size building
-  - direction size colour fill building
-  - direction size fill colour building
-  - direction fill colour size building
-  - direction fill size colour building
-  - building which is size, colour, fill, and is located direction
-  - building which is size, fill, colour, and is located direction
-  - building which is colour, size, fill, and is located direction
-  - building which is colour, fill, size, and is located direction
-  - building which is fill, size, colour, and is located direction
-  - building which is fill, colour, size, and is located direction
-  - location building
-  - building that is at the location corner of the map
+  - colour size fill building
+  - colour fill size building
+  - colour size fill building
+  - size colour fill building
+  - size fill colour building
+  - size colour fill building
+  - fill colour size building
+  - fill size colour building
+  - fill colour size building
+  - colour size fill building
+  - size colour fill building
+  - fill colour size building
+  - building which is size, colour, fill
+  - building which is size, fill, colour
+  - building which is colour, size, fill
+  - building which is colour, fill, size
+  - building which is fill, size, colour
+  - building which is fill, colour, size
 
-passenger_reference:
+passenger_formulation:
   - passenger
   - traveler
   - commuter
   - client
 
-drive_common:
+drive_formulation:
   - travel
   - drive
   - go
   - commute
 
 goal_formulation:
-  # Passenger first, then goal
-  - drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
-  # Goal first, then passenger
-  - passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
-  # Passenger first, then goal
-  - passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
-  # Goal first, then passenger
-  - a ride was requested to location_formulation. the pickup location is at location_formulation.
+  - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
+    goal_first: false
+  - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
+    goal_first: true
+  - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
+    goal_first: false
+  - phrase: a ride was requested to location_formulation. the pickup location is at location_formulation.
+    goal_first: true
 
 default_feature: "0" 
 
