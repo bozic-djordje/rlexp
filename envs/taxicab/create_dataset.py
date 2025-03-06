@@ -71,7 +71,7 @@ if __name__ == "__main__":
         "colour": hparams["colour"],
         "building": hparams["building"],
         "size": hparams["size"],
-        "novelty": hparams["novelty"]
+        "fill": hparams["fill"]
     }
     non_hard_test_attributes = deepcopy(train_test_dict)
     htest_sample = {}

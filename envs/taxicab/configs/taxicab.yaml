@@ -11,9 +11,11 @@ n_episodes: 10
 max_steps: 100
 slip_chance: 0
 seed: 1
+train_test_split: [0.8, 0.2]
 
 # Attributes that should be grounded.
 # Attributes that have a direct representation
+attribute_order: ["colour", "building", "size", "fill"]
 colour: [green, blue, red, yellow]
 building: [hospital, school, library, office]
 size: [big, small]
@@ -79,28 +81,7 @@ goal_formulation:
   # Goal first, then passenger
   - a ride was requested to location_formulation. the pickup location is at location_formulation.
 
-# Discrete representations of attributes that have a representation mapping
-colour_map:
-  green: "1"
-  blue: "2"
-  red: "3"
-  yellow: "4"
-
-building_map: 
-  hospital: "1"
-  school: "2"
-  library: "3"
-  office: "4"
-
-size_map:
-  big: "1"
-  small: "2"
-
-fill_map:
-  filled: "1"
-  outlined: "2"
-
-road_map: "0" 
+default_feature: "0" 
 
 use_color_map: True
 use_building_map: True

@@ -3,99 +3,22 @@ import os
 import numpy as np
 import torch
 import gymnasium as gym
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-from matplotlib import cm
-import random
-import re
-from copy import deepcopy
 import cv2
-from utils import load_and_resize_png, overlay_with_alpha
-
-# def substitute_placeholders(text, data):
-#     # Substitute passenger_reference, drive_common, and location_formulation
-#     text = re.sub(r"\bpassenger_reference\b", lambda _: random.choice(data["passenger_reference"]), text)
-#     text = re.sub(r"\bdrive_common\b", lambda _: random.choice(data["drive_common"]), text)
-#     text = re.sub(r"\blocation_formulation\b", lambda _: random.choice(data["location_formulation"]), text)
-
-#     # Substitute attributes like colour, fill, direction, and building
-#     for key in ["colour", "fill", "direction", "building", "size"]:
-#         text = re.sub(rf"\b{key}\b", lambda _: random.choice(data[key]), text)
-
-#     return text
-
-
-# def construct_hard_test(htest_sample: Dict, non_hard_test_attributes: Dict) -> List:
-#     samples = []
-#     # This code expect exactly two attr names
-#     attr_names = list(non_hard_test_attributes.keys())
-#     for attr_value_0 in non_hard_test_attributes[attr_names[0]]:
-#         for attr_value_1 in non_hard_test_attributes[attr_names[1]]:
-#             sample = deepcopy(htest_sample)
-#             sample[attr_names[0]] = attr_value_0
-#             sample[attr_names[1]] = attr_value_1
-#             samples.append(sample)          
-#     return samples
-
-
-# def construct_train_test(train_test_dict: Dict, split: List) -> Tuple[List]:
-#     train_samples = []
-#     test_samples = []
-
-#     attr_names = list(train_test_dict.keys())
-#     for attr_value_0 in train_test_dict[attr_names[0]]:
-#         for attr_value_1 in train_test_dict[attr_names[1]]:
-#             for attr_value_2 in train_test_dict[attr_names[2]]:
-#                 for attr_value_3 in train_test_dict[attr_names[3]]:
-#                     sample = {}
-#                     sample[attr_names[0]] = attr_value_0
-#                     sample[attr_names[1]] = attr_value_1
-#                     sample[attr_names[2]] = attr_value_2
-#                     sample[attr_names[3]] = attr_value_3
-
-#                     set_id = random.random()
-#                     if set_id < split[0]:
-#                         train_samples.append(sample)
-#                     else:
-#                         test_samples.append(sample)
-#     return train_samples, test_samples
-
-
-# def initialise_goals(self):
-#     train_test_dict = {
-#         "colour": hparams["colour"],
-#         "building": hparams["building"],
-#         "size": hparams["size"],
-#         "fill": hparams["fill"]
-#     }
-#     non_hard_test_attributes = deepcopy(train_test_dict)
-#     htest_sample = {}
-#     hard_test_attributes = hparams["hard_test_attributes"]
-    
-#     for attr_name, attr_value in hard_test_attributes.items():
-#         train_test_dict[attr_name].remove(attr_value)
-#         non_hard_test_attributes.pop(attr_name)
-#         htest_sample[attr_name] = attr_value
-    
-#     hard_test_samples = construct_hard_test(
-#         htest_sample=htest_sample, 
-#         non_hard_test_attributes=non_hard_test_attributes
-#     )
-
-#     split = [0.7, 0.3]
-#     train_samples, test_samples = construct_train_test(
-#         train_test_dict=train_test_dict, 
-#         split=split
-#     )
+from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
 
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, store_path:str, location_features: List[Dict], default_features: str, goal_pos: Tuple):
+    def __init__(self, hparams: Dict, location_features: List[Dict], goal_pos: Tuple, store_path:str, assets_path:str):
+        self._store_path = store_path
+        self._assets_path = assets_path
+
         self._grid = np.array(hparams['grid'])
         self._walls = np.equal(self._grid, 'W')
-        self._location_features = location_features
-        self._default_features = default_features
         self._target_location = goal_pos
+        self._location_features, self._default_features = self._assign_feature_values(
+            hparams=hparams, 
+            location_features=location_features
+        )
 
         self._action_to_direction = {
             0: np.array([-1, 0]), # up
@@ -127,13 +50,13 @@ class FeatureTaxicab(gym.Env):
         self._agent_location = hparams['start_pos']
         
         self.reward = {' ': -1}
-        self._store_path = store_path
         
         self._poi = None
         # Passenger spawns in one of four special feature locations, but can be dropped anywhere
         self._passenger_location = None
         self._passenger_in = 0
-        _ = self.reset(options={"location_features": location_features})
+        
+        _ = self.reset(options={"location_features": self._location_features})
 
     @property
     def obs(self) -> gym.spaces.MultiDiscrete:
@@ -153,6 +76,26 @@ class FeatureTaxicab(gym.Env):
     def grid_shape(self) -> np.ndarray:
         return self._grid.shape
         
+    def _assign_feature_values(self, hparams: Dict, location_features:List[Dict]) -> Tuple[List, str]:
+        for attr_dict in location_features:
+            feature_value_str = ""
+            feature_asset_name = ""
+            for name in hparams["attribute_order"]:
+                feature_text = attr_dict[name]
+                feature_value = hparams[name].index(feature_text) + 1
+                feature_value_str += str(feature_value)
+                if name != "size":
+                    feature_asset_name += f'{feature_text}_'
+            attr_dict["feature_value"] = feature_value_str
+            attr_dict["colour_code"] = COLOUR_MAP[attr_dict["colour"]]
+            attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name[:-1]}.png')
+        
+        default_features = hparams["default_feature"]
+        for i in range(len(hparams["attribute_order"]) - 1):
+            default_features += hparams["default_feature"]
+        
+        return location_features, default_features
+
     def _pick_random_start(self):
         x = self.rng.integers(1, self.grid_shape[0])
         y = self.rng.integers(1, self.grid_shape[1])
@@ -232,13 +175,14 @@ class FeatureTaxicab(gym.Env):
             else:
                 reward = -10
         elif action == 5:
+            # The episode always ends with the passenger being dropped off
+            is_terminal = True
+            self._passenger_in = 0
+            self._passenger_location = self._agent_location
             if self._agent_location == self._target_location and self._passenger_in == 1:
                 reward = 20
-                is_terminal = True
             else:
                 reward = -10
-                self._passenger_in = 0
-                self._passenger_location = self._agent_location
 
         self._steps += 1
         info = ''
@@ -247,7 +191,7 @@ class FeatureTaxicab(gym.Env):
             truncated = True
         return self.obs, reward, is_terminal, truncated, info
 
-    def render_feature_grid(self, cell_size:int=60, use_png=False):
+    def _render_feature_grid(self, cell_size:int=60, use_png=False):
         """Render the grid with color fill in a vectorized manner.
         Return the upscaled color image (no text yet)."""
         rows, cols = self._grid.shape
@@ -261,13 +205,13 @@ class FeatureTaxicab(gym.Env):
         # 3) Assign feature colors
         if use_png is False:
             for fkey, fdata in self._poi.items():
-                color_arr[fkey] = fdata["colour"]
+                color_arr[fkey] = fdata["colour_code"]
 
         # 4) Upscale each cell to cell_size x cell_size
         image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
         return image
     
-    def add_features(self, image, cell_size=60, use_png=False, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
+    def _add_features(self, image, cell_size=60, use_png=False, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
         """
         For each cell that has a feature (F0, F1, etc.):
         - If use_png=True, overlay the PNG tinted with color at 50% transparency
@@ -346,10 +290,14 @@ class FeatureTaxicab(gym.Env):
                 x0, x1 = loc[1] * cell_size, (loc[1] + 1) * cell_size
                 cell_center = (x0 + cell_size // 2, y0 + cell_size // 2)
                 cv2.putText(image, symbol, cell_center, font, font_scale, text_color, thickness, lineType=cv2.LINE_AA)
+    
+    def render_frame(self, use_png:bool=False) -> np.ndarray:
+        image = self._render_feature_grid(use_png=use_png)
+        self._add_features(image=image, use_png=use_png)
+        return image
 
-    def store_frame(self, plot_name:str='table') -> None:
-        image = self.render_feature_grid(use_png=True)
-        self.add_features(image=image, use_png=True)
+    def store_frame(self, plot_name:str='table', use_png:bool=False) -> None:
+        image = self.render_frame(use_png=use_png)
         output_path = os.path.join(self._store_path, f'{plot_name}_features.png')
         cv2.imwrite(output_path, image)
 
@@ -366,54 +314,36 @@ if __name__ == '__main__':
     
     location_features = [
         {
-            "colour": (0, 0, 255),
+            "colour": "red",
             "building": "hospital",
             "size": "big",
-            "fill": "filled",
-            "feature_value": "3111",
-            "png_path": "/home/djordje/dev/rlexp/envs/taxicab/assets/red_hospital_filled.png"
+            "fill": "filled"
         },
         {
-            "colour": (255, 0, 0),
+            "colour": "blue",
             "building": "school",
             "size": "big",
-            "fill": "filled",
-            "feature_value": "1211",
-            "png_path": "/home/djordje/dev/rlexp/envs/taxicab/assets/blue_school_filled.png"
+            "fill": "filled"
         },
         {
-            "colour": (0, 255, 255),
+            "colour": "yellow",
             "building": "library",
             "size": "big",
-            "fill": "filled",
-            "feature_value": "4312",
-            "png_path": "/home/djordje/dev/rlexp/envs/taxicab/assets/yellow_library_filled.png"
+            "fill": "filled"
         },
         {
-            "colour": (0, 255, 0),
+            "colour": "green",
             "building": "office",
             "size": "small",
-            "fill": "outlined",
-            "feature_value": "3421",
-            "png_path": "/home/djordje/dev/rlexp/envs/taxicab/assets/green_office_outlined.png"
+            "fill": "outlined"
         }
     ]
 
     env = FeatureTaxicab(
         hparams=hparams,
         location_features=location_features,
-        default_features="0000",
         goal_pos=(1,1),
-        store_path=store_path
+        store_path=store_path,
+        assets_path=store_path.replace("artefacts", "assets")
     )
-    env.store_frame()
-    
-    # for episode in tqdm(range(hparams['n_episodes'])):
-    #     obs, _ = env.reset()
-    #     done = False
-
-    #     while not done:
-    #         action = env.action_space.sample()
-    #         next_obs, reward, terminated, truncated, _ = env.step(action)
-    #         obs = next_obs
-    #         done = terminated or truncated
+    env.store_frame(use_png=True)
