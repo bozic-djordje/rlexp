@@ -6,15 +6,15 @@ import gymnasium as gym
 import cv2
 from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
-
+# TODO: You can't randomly assign where is passenger and where is destination because then the instruction won't match that info!
+# Change so that you get the id of where the passenger is and where the target location is according to instr in the upper class!
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, location_features: List[Dict], goal_pos: Tuple, store_path:str, assets_path:str):
+    def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str, assets_path:str):
         self._store_path = store_path
         self._assets_path = assets_path
 
         self._grid = np.array(hparams['grid'])
         self._walls = np.equal(self._grid, 'W')
-        self._target_location = goal_pos
         self._location_features, self._default_features = self._assign_feature_values(
             hparams=hparams, 
             location_features=location_features
@@ -52,11 +52,14 @@ class FeatureTaxicab(gym.Env):
         self.reward = {' ': -1}
         
         self._poi = None
+        self._origin_ind = origin_ind
+        self._dest_ind = dest_ind
         # Passenger spawns in one of four special feature locations, but can be dropped anywhere
         self._passenger_location = None
+        self._destination_location = None
         self._passenger_in = 0
         
-        _ = self.reset(options={"location_features": self._location_features})
+        _ = self.reset(options={"location_features": self._location_features, "origin_ind": origin_ind, "dest_ind": dest_ind})
 
     @property
     def obs(self) -> gym.spaces.MultiDiscrete:
@@ -99,21 +102,23 @@ class FeatureTaxicab(gym.Env):
     def _pick_random_start(self):
         x = self.rng.integers(1, self.grid_shape[0])
         y = self.rng.integers(1, self.grid_shape[1])
-        while self._grid[x, y] == 'W' or (x, y) == self._target_location or self._grid[x, y] == 'C' :
+        while self._grid[x, y] == 'W' or (x, y) == self._destination_location or self._grid[x, y] == 'C' :
             x = self.rng.integers(1, self.grid_shape[0])
             y = self.rng.integers(1, self.grid_shape[1])
         return x, y
 
-    def _init_points_of_interest(self, location_features: List[Dict]) -> Dict:
+    def _init_points_of_interest(self, location_features: List[Dict], origin_ind:int, dest_ind:int) -> Dict:
         poi = {}
         i = 0
-        passenger_i = np.random.randint(0, len(location_features))
+
         for row in range(self._grid.shape[0]):
             for col in range(self._grid.shape[1]):
                 if self._grid[row, col] == 'C':
                     poi[(row, col)] = location_features[i]
-                    if i == passenger_i:
+                    if i == origin_ind:
                         self._passenger_location = (row, col)
+                    if i == dest_ind:
+                        self._destination_location = (row, col)
                     i += 1
         return poi
 
@@ -128,12 +133,18 @@ class FeatureTaxicab(gym.Env):
         self._steps = 0
         info = ''
         
-        if not options or 'location_features' not in options:
-            location_features = self._location_features
-        else:
-            location_features = options['location_features']
-        self._poi = self._init_points_of_interest(location_features=location_features)
-        
+        # If the reset was called with options then we update env parameters
+        # before initialising points of interest. This corresponds to the new task!
+        if options and 'location_features' in options:
+            self._location_features = options['location_features']
+            self._origin_ind = options['origin_ind']
+            self._dest_ind = options['dest_ind']
+
+        self._poi = self._init_points_of_interest(
+            location_features=location_features,
+             origin_ind=self._origin_ind, 
+             dest_ind=self._dest_ind
+        )
         assert self._grid[self._agent_location] != 'W'
         return self.obs, info
 
@@ -179,7 +190,7 @@ class FeatureTaxicab(gym.Env):
             is_terminal = True
             self._passenger_in = 0
             self._passenger_location = self._agent_location
-            if self._agent_location == self._target_location and self._passenger_in == 1:
+            if self._agent_location == self._destination_location and self._passenger_in == 1:
                 reward = 20
             else:
                 reward = -10
@@ -232,6 +243,7 @@ class FeatureTaxicab(gym.Env):
                 png_dir = os.path.dirname(feature_dict["png_path"])
             agent_image = load_and_resize_png(os.path.join(png_dir, "taxi.png"), small_size, keep_alpha=True)
             passenger_image = load_and_resize_png(os.path.join(png_dir, "passenger.png"), small_size, keep_alpha=True)
+            destination_image = load_and_resize_png(os.path.join(png_dir, "destination.png"), small_size, keep_alpha=True)
             
         # Iterate over each feature type
         for loc, feature_dict in self._poi.items():
@@ -284,8 +296,15 @@ class FeatureTaxicab(gym.Env):
                 x_offset = x0 + (cell_size - small_size) // 2
                 y_offset = y0 + (cell_size - small_size) // 2
                 overlay_with_alpha(image, overlay_image, x_offset, y_offset)
+            
+            y0, y1 = self._destination_location[0] * cell_size, (self._destination_location[0] + 1) * cell_size
+            x0, x1 = self._destination_location[1] * cell_size, (self._destination_location[1] + 1) * cell_size
+            x_offset = x0 + (cell_size - small_size) // 2
+            y_offset = y0 + (cell_size - small_size) // 2
+            overlay_with_alpha(image, destination_image, x_offset, y_offset)
+            
         else:
-            for loc, symbol in zip([self._agent_location, self._passenger_location], ['T', 'P']):
+            for loc, symbol in zip([self._agent_location, self._passenger_location, self._destination_location], ['T', 'P', 'D']):
                 y0, y1 = loc[0] * cell_size, (loc[0] + 1) * cell_size
                 x0, x1 = loc[1] * cell_size, (loc[1] + 1) * cell_size
                 cell_center = (x0 + cell_size // 2, y0 + cell_size // 2)
@@ -342,8 +361,9 @@ if __name__ == '__main__':
     env = FeatureTaxicab(
         hparams=hparams,
         location_features=location_features,
-        goal_pos=(1,1),
+        origin_ind=1,
+        dest_ind=2,
         store_path=store_path,
         assets_path=store_path.replace("artefacts", "assets")
     )
-    env.store_frame(use_png=True)
+    env.store_frame(use_png=False)
