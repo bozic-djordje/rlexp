@@ -11,13 +11,16 @@ class FeatureTaxicab(gym.Env):
     def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str, assets_path:str):
         self._store_path = store_path
         self._assets_path = assets_path
+        
+        self._feature_map = {}
+        self._feature_order = hparams["attribute_order"]
+        for feature_name in self._feature_order:
+            self._feature_map[feature_name] = hparams[feature_name]
+        self._default_features = [int(hparams["default_feature"]) for _ in range(len(self._feature_order))]
 
         self._grid = np.array(hparams['grid'])
         self._walls = np.equal(self._grid, 'W')
-        self._location_features, self._default_features = self._assign_feature_values(
-            hparams=hparams, 
-            location_features=location_features
-        )
+        self._location_features = self._assign_feature_values(location_features=location_features)
         self.pomdp = hparams["pomdp"]
         self._action_to_direction = {
             0: np.array([-1, 0]), # up
@@ -85,17 +88,17 @@ class FeatureTaxicab(gym.Env):
     def grid_shape(self) -> np.ndarray:
         return self._grid.shape
         
-    def _assign_feature_values(self, hparams: Dict, location_features:List[Dict]) -> Tuple[List, str]:
+    def _assign_feature_values(self, location_features:List[Dict]) -> Tuple[List, str]:
         for attr_dict in location_features:
             feature_value_str = ""
             feature_value_lst = []
             feature_asset_name = ""
-            for name in hparams["attribute_order"]:
-                feature_text = attr_dict[name]
-                feature_value = hparams[name].index(feature_text) + 1
+            for feature_name in self._feature_map.keys():
+                feature_text = attr_dict[feature_name]
+                feature_value = self._feature_map[feature_name].index(feature_text) + 1
                 feature_value_str += str(feature_value)
                 feature_value_lst.append(feature_value)
-                if name != "size":
+                if feature_name != "size":
                     feature_asset_name += f'{feature_text}_'
             # Feature values stored as a string
             attr_dict["feature_value_text"] = feature_value_str
@@ -103,12 +106,7 @@ class FeatureTaxicab(gym.Env):
             attr_dict["feature_value_list"] = feature_value_lst
             attr_dict["colour_code"] = COLOUR_MAP[attr_dict["colour"]]
             attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name[:-1]}.png')
-        
-        default_features = []
-        for i in range(len(hparams["attribute_order"])):
-            default_features.append(int(hparams["default_feature"]))
-        
-        return location_features, default_features
+        return location_features
 
     def _pick_random_start(self):
         x = self.rng.integers(1, self.grid_shape[0])
@@ -147,7 +145,7 @@ class FeatureTaxicab(gym.Env):
         # If the reset was called with options then we update env parameters
         # before initialising points of interest. This corresponds to the new task!
         if options and 'location_features' in options:
-            self._location_features = options['location_features']
+            self._location_features = self._assign_feature_values(location_features=options['location_features'])
             self._origin_ind = options['origin_ind']
             self._dest_ind = options['dest_ind']
 
@@ -273,9 +271,9 @@ class FeatureTaxicab(gym.Env):
                 if feature_dict["size"] == "big":
                     image[y0:y1, x0:x1] = png_cache[loc]
                 else:
-                    x_offset = x0 + (cell_size - png_size) // 2
-                    y_offset = y0 + (cell_size - png_size) // 2
-                    image[y_offset:y_offset+png_size, x_offset:x_offset+png_size] = png_cache[loc]
+                    x_offset = x0 + (cell_size - small_size) // 2
+                    y_offset = y0 + (cell_size - small_size) // 2
+                    image[y_offset:y_offset+small_size, x_offset:x_offset+small_size] = png_cache[loc]
             else:
                 # Place four letters in a 2×2 arrangement, shifted left/down.
                 # 'quarter' is 1/4 of the cell size; 
