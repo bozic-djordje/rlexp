@@ -6,6 +6,8 @@ grid:
   - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
   - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+# If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
+pomdp: true 
 start_pos: null
 n_episodes: 10
 max_steps: 100

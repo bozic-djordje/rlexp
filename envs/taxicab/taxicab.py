@@ -6,8 +6,7 @@ import gymnasium as gym
 import cv2
 from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
-# TODO: You can't randomly assign where is passenger and where is destination because then the instruction won't match that info!
-# Change so that you get the id of where the passenger is and where the target location is according to instr in the upper class!
+
 class FeatureTaxicab(gym.Env):
     def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str, assets_path:str):
         self._store_path = store_path
@@ -19,7 +18,7 @@ class FeatureTaxicab(gym.Env):
             hparams=hparams, 
             location_features=location_features
         )
-
+        self.pomdp = hparams["pomdp"]
         self._action_to_direction = {
             0: np.array([-1, 0]), # up
             1: np.array([1, 0]),  # down
@@ -49,7 +48,7 @@ class FeatureTaxicab(gym.Env):
             self.start_pos = hparams['start_pos']
         self._agent_location = hparams['start_pos']
         
-        self.reward = {' ': -1}
+        self.reward = {' ': -1, 'C': 0}
         
         self._poi = None
         self._origin_ind = origin_ind
@@ -63,12 +62,19 @@ class FeatureTaxicab(gym.Env):
 
     @property
     def obs(self) -> gym.spaces.MultiDiscrete:
-        if self._agent_location in self._poi:
-            str_features = self._poi[self._agent_location]["fature_value"]
+        features = [self._agent_location[0], self._agent_location[1], self._passenger_in]
+        if not self.pomdp:
+            origin_dest_features = [self._passenger_location[0], self._passenger_location[1], self._destination_location[0], self._destination_location[1]]
         else:
-            str_features = self._default_features
-        features = [self._agent_location[0], self._agent_location[1], self._passenger_location[0], self._passenger_location[1], self._passenger_in]
-        features.extend([int(f) for f in str_features])
+            # TODO: Should we just add zeros, or add nothing at all?
+            origin_dest_features = [0, 0, 0, 0]
+        features.extend(origin_dest_features)
+
+        if self._agent_location in self._poi:
+            obs_features = self._poi[self._agent_location]["feature_value_list"]
+        else:
+            obs_features = self._default_features
+        features.extend(obs_features)
         return np.array(features, dtype=int)
     
     @property 
@@ -82,20 +88,25 @@ class FeatureTaxicab(gym.Env):
     def _assign_feature_values(self, hparams: Dict, location_features:List[Dict]) -> Tuple[List, str]:
         for attr_dict in location_features:
             feature_value_str = ""
+            feature_value_lst = []
             feature_asset_name = ""
             for name in hparams["attribute_order"]:
                 feature_text = attr_dict[name]
                 feature_value = hparams[name].index(feature_text) + 1
                 feature_value_str += str(feature_value)
+                feature_value_lst.append(feature_value)
                 if name != "size":
                     feature_asset_name += f'{feature_text}_'
-            attr_dict["feature_value"] = feature_value_str
+            # Feature values stored as a string
+            attr_dict["feature_value_text"] = feature_value_str
+            # Feature values stored as an array of integers
+            attr_dict["feature_value_list"] = feature_value_lst
             attr_dict["colour_code"] = COLOUR_MAP[attr_dict["colour"]]
             attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name[:-1]}.png')
         
-        default_features = hparams["default_feature"]
-        for i in range(len(hparams["attribute_order"]) - 1):
-            default_features += hparams["default_feature"]
+        default_features = []
+        for i in range(len(hparams["attribute_order"])):
+            default_features.append(int(hparams["default_feature"]))
         
         return location_features, default_features
 
@@ -122,7 +133,7 @@ class FeatureTaxicab(gym.Env):
                     i += 1
         return poi
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+    def reset(self, seed: Optional[int]=None, options: Optional[dict]=None):
         """ Reset the environment and return the initial state number
         """
         super().reset(seed=seed)
@@ -141,7 +152,7 @@ class FeatureTaxicab(gym.Env):
             self._dest_ind = options['dest_ind']
 
         self._poi = self._init_points_of_interest(
-            location_features=location_features,
+            location_features=self._location_features,
              origin_ind=self._origin_ind, 
              dest_ind=self._dest_ind
         )
@@ -161,7 +172,8 @@ class FeatureTaxicab(gym.Env):
             action = action.item()
         assert(action >= 0)
         assert(action <= 5)
-        
+        is_terminal = False
+
         # Update agent location for the movement actions
         if self.rng.random() < self._slip_chance:
             if action == 0:
@@ -173,7 +185,7 @@ class FeatureTaxicab(gym.Env):
             elif action == 3:
                 action = self.rng.choice([0, 1])
         
-        agent_location = tuple(self.obs + self._action_to_direction[action])
+        agent_location = tuple(self.obs[0:2] + self._action_to_direction[action])
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
@@ -181,17 +193,20 @@ class FeatureTaxicab(gym.Env):
         
         # Handle non-movement pick up and drop passenger actions
         if action == 4:
-            if self._passenger_location == self._agent_location:
+            if self._passenger_in == 0 and self._passenger_location == self._agent_location:
                 self._passenger_in = 1
             else:
                 reward = -10
         elif action == 5:
             # The episode always ends with the passenger being dropped off
-            is_terminal = True
-            self._passenger_in = 0
-            self._passenger_location = self._agent_location
-            if self._agent_location == self._destination_location and self._passenger_in == 1:
-                reward = 20
+            if self._passenger_in == 1:
+                is_terminal = True
+                self._passenger_in = 0
+                self._passenger_location = self._agent_location
+                if self._agent_location == self._destination_location:
+                    reward = 20
+                else:
+                    reward = -10
             else:
                 reward = -10
 
@@ -202,7 +217,7 @@ class FeatureTaxicab(gym.Env):
             truncated = True
         return self.obs, reward, is_terminal, truncated, info
 
-    def _render_feature_grid(self, cell_size:int=60, use_png=False):
+    def _render_feature_grid(self, cell_size:int=60, use_png=True):
         """Render the grid with color fill in a vectorized manner.
         Return the upscaled color image (no text yet)."""
         rows, cols = self._grid.shape
@@ -222,7 +237,7 @@ class FeatureTaxicab(gym.Env):
         image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
         return image
     
-    def _add_features(self, image, cell_size=60, use_png=False, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
+    def _add_features(self, image, cell_size=60, use_png=True, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
         """
         For each cell that has a feature (F0, F1, etc.):
         - If use_png=True, overlay the PNG tinted with color at 50% transparency
@@ -247,7 +262,7 @@ class FeatureTaxicab(gym.Env):
             
         # Iterate over each feature type
         for loc, feature_dict in self._poi.items():
-            letters = feature_dict["feature_value"]
+            letters = feature_dict["feature_value_text"]
             r = loc[0]
             c = loc[1]
 
@@ -310,19 +325,20 @@ class FeatureTaxicab(gym.Env):
                 cell_center = (x0 + cell_size // 2, y0 + cell_size // 2)
                 cv2.putText(image, symbol, cell_center, font, font_scale, text_color, thickness, lineType=cv2.LINE_AA)
     
-    def render_frame(self, use_png:bool=False) -> np.ndarray:
+    def render_frame(self, use_png:bool=True) -> np.ndarray:
         image = self._render_feature_grid(use_png=use_png)
         self._add_features(image=image, use_png=use_png)
         return image
 
-    def store_frame(self, plot_name:str='table', use_png:bool=False) -> None:
+    def store_frame(self, plot_name:str='table', use_png:bool=True) -> None:
         image = self.render_frame(use_png=use_png)
-        output_path = os.path.join(self._store_path, f'{plot_name}_features.png')
+        output_path = os.path.join(self._store_path, f'{plot_name}.png')
         cv2.imwrite(output_path, image)
 
 
 if __name__ == '__main__':
     from utils import setup_artefact_paths
+    from tqdm import tqdm
 
     script_path = os.path.abspath(__file__)
     store_path, yaml_path = setup_artefact_paths(script_path=script_path)
@@ -366,4 +382,23 @@ if __name__ == '__main__':
         store_path=store_path,
         assets_path=store_path.replace("artefacts", "assets")
     )
-    env.store_frame(use_png=False)
+    env.store_frame(use_png=True)
+    i = 0
+    for episode in tqdm(range(hparams['n_episodes'])):
+        origin_ind = np.random.randint(0, len(location_features))
+        dest_ind = (origin_ind + 1) % len(location_features)
+        options = {
+            "location_features": location_features,
+            "origin_ind": origin_ind, 
+            "dest_ind": dest_ind
+        }
+        obs, _ = env.reset(options=options)
+        done = False
+
+        while not done:
+            action = env.action_space.sample()
+            next_obs, reward, terminated, truncated, _ = env.step(action)
+            obs = next_obs
+            done = terminated or truncated
+        env.store_frame(plot_name=f"final_step_task_{i}", use_png=True)
+        i+= 1
