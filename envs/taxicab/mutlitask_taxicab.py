@@ -5,7 +5,7 @@ import gymnasium as gym
 import random
 import re
 from copy import deepcopy
-from taxicab import FeatureTaxicab
+from envs.taxicab.single_taxicab import FeatureTaxicab
 
 
 class MultitaskTaxicab(gym.Env):
