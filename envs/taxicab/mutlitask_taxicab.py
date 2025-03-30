@@ -9,7 +9,7 @@ from taxicab import FeatureTaxicab
 
 
 class MultitaskTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, store_path:str, assets_path:str):
+    def __init__(self, hparams: Dict, store_path:str):
         # Attribute-value combinations allowed in train and (non-hard) test set
         self.nh_attr_combs = deepcopy({name: hparams[name] for name in hparams["attribute_order"]})
         # Attribute-value combinations that can be varied in the hard test set (others are fixed)
@@ -46,8 +46,7 @@ class MultitaskTaxicab(gym.Env):
             location_features=self.cur_task,
             origin_ind=origin_index,
             dest_ind=dest_index,
-            store_path=store_path,
-            assets_path=assets_path
+            store_path=store_path
         )
 
     @property
@@ -189,8 +188,7 @@ if __name__ == "__main__":
 
     env = MultitaskTaxicab(
         hparams=hparams, 
-        store_path=store_path,
-        assets_path=store_path.replace("artefacts", "assets")
+        store_path=store_path
     )
     options = {"set_id": "train"}
     for episode in tqdm(range(hparams['n_episodes'])):

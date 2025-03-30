@@ -92,7 +92,7 @@ drive_formulation:
   - travel
   - drive
   - go
-  - commute
+  - head
 
 goal_formulation:
   - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.

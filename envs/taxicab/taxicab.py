@@ -7,10 +7,12 @@ import cv2
 from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
 
+ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str, assets_path:str):
+    def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str):
         self._store_path = store_path
-        self._assets_path = assets_path
+        self._assets_path = ASSETS_PATH
         
         self._feature_map = {}
         self._feature_order = hparams["attribute_order"]
@@ -377,8 +379,7 @@ if __name__ == '__main__':
         location_features=location_features,
         origin_ind=1,
         dest_ind=2,
-        store_path=store_path,
-        assets_path=store_path.replace("artefacts", "assets")
+        store_path=store_path
     )
     env.store_frame(use_png=True)
     i = 0
