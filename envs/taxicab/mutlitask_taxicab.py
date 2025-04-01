@@ -69,10 +69,6 @@ class MultitaskTaxicab(gym.Env):
     def observation_space(self):
         return self.env.observation_space
     
-    @property
-    def instruction(self):
-        return self.cur_instr
-    
     def _construct_hard_featre_combs(self, htest_template: Dict) -> List:
         hhold_ftr_combos = []
         # This code expect exactly two attr names
