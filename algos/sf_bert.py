@@ -8,7 +8,7 @@ from tianshou.data.buffer.base import ReplayBuffer, Batch
 from transformers import BertTokenizer, BertModel
 
 class SFBert(Agent):
-    def __init__(self, params: Dict, phi_nn:nn.Module, psi_nn:nn.Module, n_acts:int, rb:ReplayBuffer, eps_scheduler:Scheduler, device):
+    def __init__(self, params: Dict, phi_nn:nn.Module, psi_nn:nn.Module, n_acts:int, rb:ReplayBuffer, device):
         super().__init__(params=params)
         self.device = device
 
@@ -43,9 +43,6 @@ class SFBert(Agent):
         self.total_steps = 0
         self.nn_t_update_steps = params["target_update_steps"]
         
-        self.epsilon_scheduler = eps_scheduler
-        self.epsilon = self.epsilon_scheduler.current
-        
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
 
@@ -54,7 +51,7 @@ class SFBert(Agent):
         else:
             self.rng = torch.Generator()
         self.weight_keys = ['phi_nn', 'psi_nn']
-        
+
     def update_target_model(self):
         self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
 
@@ -141,10 +138,7 @@ class SFBert(Agent):
         self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
 
     def update(self, batch_size:int=0) -> None:
-
-        self.epsilon = self.epsilon_scheduler.step()
         self.total_steps += 1
-        self.history["epsilon"].append(self.epsilon)
 
         if self.total_steps < self.warmup_steps:
             return
@@ -175,13 +169,13 @@ class SFBert(Agent):
             opt_act = torch.argmax(q).squeeze(-1)
         return opt_act.detach().item()
 
-    def select_action(self, obs: torch.Tensor, instr:str) -> int:
+    def select_action(self, obs: torch.Tensor, instr:str, epsilon:float=None) -> int:
         # If the instruction has changed, update it
         if instr != self.instr_text:
             self.instr_text = instr
             self.w = self.get_embedding(text=self.instr_text)
 
-        if torch.rand(1, generator=self.rng).item() < self.epsilon:
+        if epsilon is not None and torch.rand(1, generator=self.rng).item() < epsilon:
             act_ind = torch.randint(low=0, high=self.n_acts, size=(1,)).item()
         else:
             if not isinstance(obs, torch.Tensor):
@@ -233,7 +227,6 @@ if __name__ == '__main__':
     )
 
     rb = ReplayBuffer(size=hparams['buffer_size'])
-    scheduler = Scheduler(start=hparams['schedule_start'], end=hparams['schedule_end'], decay_func=lambda step: hparams['schedule_decay'] * step)
     
     phi_nn = FCTrunk(
         in_dim=env.observation_space.shape[0],
@@ -252,19 +245,25 @@ if __name__ == '__main__':
         n_acts=env.action_space.n,
         phi_nn=phi_nn,
         psi_nn=psi_nn,
-        eps_scheduler=scheduler,
         device=device
     )
     
     if to_rerun:
-       returns = []
+       returns = {}
+       instr_eps = {}
        for _ in tqdm(range(hparams['n_episodes'])):
-        obs, _ = env.reset()
+        obs, _ = env.reset(options={"set_id": "train"})
+        instruction = env.instruction
+        if instruction not in instr_eps:
+            instr_eps[instruction] = Scheduler(start=hparams['schedule_start'], end=hparams['schedule_end'], decay_func=lambda step: hparams['schedule_decay'] * step)
+            returns[instruction] = []
+        
         done = False
         total_reward = 0
 
         while not done:
-            action = agent.select_action(obs=obs, instr=env.instruction)
+            epsilon = instr_eps[instruction].step()
+            action = agent.select_action(obs=obs, instr=env.instruction, epsilon=epsilon)
             next_obs, reward, terminated, truncated, _ = env.step(action)
             agent.store_transition(
                 obs=obs, 
@@ -281,7 +280,7 @@ if __name__ == '__main__':
             obs = next_obs
             total_reward += reward
         
-        returns.append(total_reward)
+        returns[instruction].append(total_reward)
         weight_keys = agent.store_weights(path=weights_path)
     else:
         weight_keys = agent.load_weights(path=weights_path)
@@ -300,18 +299,21 @@ if __name__ == '__main__':
         label="Phi L2 Loss"
     )
 
-    epsilon_path = os.path.join(store_path, f'{hparams["algo_type"]}_epsilon')
-    plot_scalar(
-        scalars=agent.history["epsilon"], 
-        save_path=epsilon_path,
-        label="Epsilon"
-    )
-
-    loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_return')
-    plot_scalar(
-        scalars=returns, 
-        save_path=loss_path,
-        label="Returns"
-    )
+    # epsilon_path = os.path.join(store_path, f'{hparams["algo_type"]}_epsilon')
+    # plot_scalar(
+    #     scalars=agent.history["epsilon"], 
+    #     save_path=epsilon_path,
+    #     label="Epsilon"
+    # )
+    i = 0
+    for instr, rets in returns.items():
+        loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_return_{i}')
+        plot_scalar(
+            scalars=rets, 
+            save_path=loss_path,
+            label="Returns",
+            title=instr
+        )
+        i+= 1
 
     
