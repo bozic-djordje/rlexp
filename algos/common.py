@@ -9,7 +9,7 @@ from typing import Union, Tuple
 
 # TODO: Use this class to define some Agent properties, now useful for type hinting
 class Agent:
-    def __init__(self, params:Dict):
+    def __init__(self):
         self.history = defaultdict(list)
 
     def store_transition(self, obs:Union[torch.Tensor, np.ndarray, np.generic], next_obs:Union[torch.Tensor, np.ndarray, np.generic], action:Union[torch.Tensor, np.ndarray, np.generic], reward:Union[torch.Tensor, np.ndarray, np.generic], terminated: bool, truncated: bool) -> Tuple:
@@ -37,25 +37,25 @@ class Agent:
         return obs, next_obs, action, reward, terminated, truncated
 
     @abstractmethod
-    def update(self):
+    def update():
         pass
 
     @abstractmethod
-    def store_weights(self):
+    def store_weights():
         pass
 
     @abstractmethod
-    def load_weights(self):
+    def load_weights():
         pass
 
     @abstractmethod
-    def select_action(self, obs: torch.Tensor) -> Any:
+    def select_action(obs: torch.Tensor) -> Any:
         pass
 
 
 class TabularAgent(Agent):
     def __init__(self, params: Dict):
-        super().__init__(params=params)
+        super().__init__()
         self.n_states = params["n_states"]
         self.n_acts = params["n_acts"]
     

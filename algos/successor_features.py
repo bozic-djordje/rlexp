@@ -21,8 +21,8 @@ class SFQTabular(TabularAgent):
         # See Barreto et al. 2013
         self.d = (self.n_states**2 * self.n_acts).item()
         
-        self.lr = params["step_size"]
-        self.gamma = params["disc_fact"]
+        self.step_size = params["step_size"]
+        self.disc_fact = params["disc_fact"]
 
         self.warmup_steps = params["warmup_steps"]
         self.total_steps = 0
@@ -103,7 +103,7 @@ class SFQTabular(TabularAgent):
         one_hot_index = self._dense_index_to_one_hot_index(obs_ind=obs_ind, action_ind=action_ind, next_obs_ind=next_obs_ind)
         phi_t = self.one_hot_index_to_vector(one_hot_index=one_hot_index)
         expect_pi = self.psi[next_obs_ind, next_action_ind, :]
-        self.psi[obs_ind, action_ind, :] = phi_t + self.gamma * expect_pi
+        self.psi[obs_ind, action_ind, :] = phi_t + self.disc_fact * expect_pi
         return phi_t
     
     def _update_w(self, phi_t:torch.Tensor, reward:float) -> None:
@@ -154,7 +154,7 @@ class SFQTabular(TabularAgent):
         return self.weight_keys
     
     def load_weights(self, path:str) -> None:
-        weights = torch.load(path, weights_only=False)
+        weights = torch.load(weights_path, weights_only=False)
         self.psi = weights[self.weight_keys[0]].to(self.device)
         self.w = weights[self.weight_keys[1]].to(self.device)
         return self.weight_keys
