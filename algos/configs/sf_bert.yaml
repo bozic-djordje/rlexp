@@ -116,18 +116,18 @@ hard_test_attributes:
   building: hospital
 
 # Experiment hyper-parameters
-n_episodes: 100
+n_episodes: 10000
 max_steps: 1000
 buffer_size: 1000
 seed: 1
 start_pos: null
 
 # Algorithm hyper-parameters
-step_size: 0.001 #alpha
+step_size: 0.0001 #alpha
 disc_fact: 0.9 #gamma
 batch_size: 64
-warmup_steps: 64
-target_update_steps: 64
+warmup_steps: 100
+target_update_steps: 500
 algo_type: sf_bert
 hidden_dim: null
 
