@@ -6,6 +6,7 @@ from typing import Any, Dict, Callable
 import torch
 import numpy as np
 from typing import Union, Tuple
+import math
 
 # TODO: Use this class to define some Agent properties, now useful for type hinting
 class Agent:
@@ -94,6 +95,40 @@ class Scheduler:
     def step(self):
         self.current = max(self.end, self.decay_func(self.current))
         return self.current
+    
+
+class TrainHookFactory:
+    # Class-wide attributes
+    agent = None
+    logger = None
+    eps_start: float = None
+    eps_end: float = None
+    decay_steps: int = None
+    k: float = None
+
+    @classmethod
+    def initialize(cls, hparams: Dict, max_steps: int, agent, logger):
+        cls.agent = agent
+        cls.logger = logger
+        cls.eps_start = hparams["schedule_start"]
+        cls.eps_end = hparams["schedule_end"]
+        decay_fraction = hparams.get("schedule_fraction", 0.67)
+        cls.decay_steps = int(max_steps * decay_fraction)
+        delta = 1e-3
+        cls.k = -math.log(delta / (cls.eps_start - cls.eps_end)) / cls.decay_steps
+
+    @staticmethod
+    def train_hook(epoch: int, global_step: int):
+        if TrainHookFactory.agent is None or TrainHookFactory.logger is None:
+            raise RuntimeError("Scheduler must be initialized with agent and logger before calling train_fn.")
+
+        if global_step <= TrainHookFactory.decay_steps:
+            epsilon = TrainHookFactory.eps_end + (TrainHookFactory.eps_start - TrainHookFactory.eps_end) * math.exp(-TrainHookFactory.k * global_step)
+        else:
+            epsilon = TrainHookFactory.eps_end
+
+        TrainHookFactory.agent.set_eps(epsilon)
+        TrainHookFactory.logger.write("train/env_step", global_step, {"epsilon": TrainHookFactory.agent.eps})
 
 
 #TODO: Remove stochastic once SFeatures become real agents

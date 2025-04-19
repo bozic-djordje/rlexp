@@ -1,4 +1,6 @@
+from datetime import datetime
 import os
+import shutil
 import cv2
 import numpy as np
 
@@ -19,6 +21,21 @@ def setup_artefact_paths(script_path:str, script_name:str=None):
     if not os.path.isdir(store_path):
         os.mkdir(store_path)
     return store_path, yaml_path
+
+def setup_experiment(script_path:str, base_name:str=None, save_yaml:bool=True):
+    store_path, yaml_path = setup_artefact_paths(script_path=script_path)
+    if base_name is None:
+        base_name = os.path.basename(script_path).replace('.py', '')
+    experiment_name = f'{base_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    
+    store_path = os.path.join(store_path, experiment_name)
+    if not os.path.isdir(store_path):
+        os.mkdir(store_path)
+    
+    if save_yaml is True:
+        shutil.copy2(yaml_path, store_path)
+
+    return experiment_name, store_path, yaml_path
 
 def load_and_resize_png(path:str, cell_size:int, keep_alpha:bool=False) -> np.ndarray:
     """
