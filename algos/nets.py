@@ -50,6 +50,38 @@ class FCMultiHead(nn.Module):
         # Compute each head's output and stack along head dimension
         head_outs = [head(x).unsqueeze(1) for head in self.action_heads]
         return torch.cat(head_outs, dim=1)
+
+
+class FCActionValue(nn.Module):
+    def __init__(self, in_dim, num_actions, h:Tuple=(16)):
+        super(FCActionValue, self).__init__()
+        self.in_dim = in_dim
+        self.num_actions = num_actions
+
+        if len(h) == 0:
+            modules = [
+                nn.Linear(self.in_dim, num_actions, dtype=torch.float32),
+                nn.ReLU()
+            ]
+        else:
+            modules = [
+                nn.Linear(self.in_dim, h[0], dtype=torch.float32),
+                nn.ReLU()
+            ]
+            for i in range(1, len(h)-1):
+                modules.append(nn.Linear(h[i-1], h[i], dtype=torch.float32))
+                modules.append(nn.ReLU())
+            modules.append(nn.Linear(h[-1], self.num_actions, dtype=torch.float32))
+
+        self.nnet = nn.Sequential(*modules)
+
+    def forward(self, x, state=None, info={}):
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float)
+        else:
+            x = x.type(torch.float32)
+        batch = x.shape[0]
+        return self.nnet(x.view(batch, -1)), state
     
 
 if __name__ == "__main__":

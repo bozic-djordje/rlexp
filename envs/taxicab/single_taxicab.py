@@ -142,7 +142,7 @@ class FeatureTaxicab(gym.Env):
         else:
             self._agent_location = self.start_pos
         self._steps = 0
-        info = ''
+        info = {}
         
         # If the reset was called with options then we update env parameters
         # before initialising points of interest. This corresponds to the new task!
@@ -211,7 +211,7 @@ class FeatureTaxicab(gym.Env):
                 reward = -10
 
         self._steps += 1
-        info = ''
+        info = {}
         truncated = False
         if self._max_steps is not None and self._steps >= self._max_steps:
             truncated = True
