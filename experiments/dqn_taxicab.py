@@ -4,14 +4,13 @@ import torch
 import math
 
 from tianshou.policy import DQNPolicy
-from tianshou.data import Batch, Collector, ReplayBuffer
+from tianshou.data import Collector, ReplayBuffer
 from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from tqdm import tqdm
 from algos.nets import FCActionValue
-from algos.common import EpsilonDecayHookFactory
+from algos.common import EpsilonDecayHookFactory, SaveHookFactory
 from envs.taxicab.single_taxicab import FeatureTaxicab
 from utils import setup_experiment, setup_artefact_paths
 
@@ -92,15 +91,18 @@ if __name__ == '__main__':
     
     n_epochs = hparams["n_epochs"]
     n_steps = hparams["epoch_steps"]
-    hook_factory = EpsilonDecayHookFactory(hparams=hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
-
+    epoch_hook_factory = EpsilonDecayHookFactory(hparams=hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+    
     result = OffpolicyTrainer(
         policy=agent,
         train_collector=train_collector,
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=200,
         update_per_step=0.25, episode_per_test=100, batch_size=hparams["batch_size"],
-        train_fn=hook_factory.hook,
+        train_fn=epoch_hook_factory.hook,
         test_fn=lambda epoch, global_step: agent.set_eps(0.05),
+        save_best_fn=save_hook_factory.hook,
         logger=logger
     ).run()
+    torch.save(agent.state_dict(), f'{store_path}/last_model.pth')

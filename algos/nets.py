@@ -83,8 +83,8 @@ class FCActionValue(nn.Module):
                 nn.Linear(self.in_dim, h[0], dtype=torch.float32),
                 nn.ReLU()
             ])
-            for i in range(1, len(h)-1):
-                modules.append(nn.Linear(h[i-1], h[i], dtype=torch.float32))
+            for i in range(0, len(h)-1):
+                modules.append(nn.Linear(h[i], h[i+1], dtype=torch.float32))
                 modules.append(nn.ReLU())
             modules.append(nn.Linear(h[-1], self.num_actions, dtype=torch.float32))
 
