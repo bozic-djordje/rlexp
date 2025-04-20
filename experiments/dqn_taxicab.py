@@ -56,23 +56,19 @@ if __name__ == '__main__':
     train_env = FeatureTaxicab(
         hparams=hparams,
         location_features=location_features,
-        origin_ind=1,
-        dest_ind=2,
         store_path=store_path
     )
 
     test_env = FeatureTaxicab(
         hparams=hparams,
         location_features=location_features,
-        origin_ind=1,
-        dest_ind=2,
         store_path=store_path
     )
     
     nnet = FCActionValue(
         in_dim=train_env.observation_space.shape[0],
         num_actions=int(train_env.action_space.n),
-        h=[64]
+        h=hparams["hidden_dim"]
     )
 
     optim = torch.optim.Adam(nnet.parameters(), lr=hparams["step_size"])
