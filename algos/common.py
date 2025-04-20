@@ -100,7 +100,7 @@ class Scheduler:
         return self.current
 
 
-class HookFactory(ABC):
+class EpochHookFactory(ABC):
     def __init__(self, agent: BasePolicy, logger: TensorboardLogger):
         self.agent = agent
         self.logger = logger
@@ -111,7 +111,7 @@ class HookFactory(ABC):
         pass
 
 
-class EpsilonDecayHookFactory(HookFactory):
+class EpsilonDecayHookFactory(EpochHookFactory):
     def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger):
         super().__init__(agent, logger)
 
@@ -132,6 +132,13 @@ class EpsilonDecayHookFactory(HookFactory):
         self.agent.set_eps(epsilon)
         self.logger.write("train/env_step", global_step, {"epsilon": self.agent.eps})
 
+class SaveHookFactory:
+    def __init__(self, save_path:str):
+        self.save_path = save_path
+
+    @abstractmethod
+    def hook(self, agent: BasePolicy):
+        torch.save(agent.state_dict(), self.save_path)
 
 #TODO: Remove stochastic once SFeatures become real agents
 def train_loop(env: Env, agent: Agent, hparams: Dict, random=False) -> None:

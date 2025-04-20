@@ -53,8 +53,6 @@ class FeatureTaxicab(gym.Env):
             self.start_pos = hparams['start_pos']
         self._agent_location = hparams['start_pos']
         
-        self.reward = {' ': -1, 'C': 0}
-        
         self._poi = None
         self._origin_ind = origin_ind
         self._dest_ind = dest_ind
@@ -173,6 +171,7 @@ class FeatureTaxicab(gym.Env):
         assert(action >= 0)
         assert(action <= 5)
         is_terminal = False
+        reward = -1
 
         # Update agent location for the movement actions
         if self.rng.random() < self._slip_chance:
@@ -189,7 +188,6 @@ class FeatureTaxicab(gym.Env):
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
-        reward = self.reward[self._grid[self._agent_location]]
         
         # Handle non-movement pick up and drop passenger actions
         if action == 4:
@@ -198,14 +196,12 @@ class FeatureTaxicab(gym.Env):
             else:
                 reward = -10
         elif action == 5:
-            # The episode always ends with the passenger being dropped off
-            if self._passenger_in == 1:
-                is_terminal = True
+            # The episode ends only if passenger is dropped off to the correct location
+            # Otherwise agent gets -10 penalty
+            if self._passenger_in == 1 and self._agent_location == self._destination_location:
                 self._passenger_in = 0
-                if self._agent_location == self._destination_location:
-                    reward = 20
-                else:
-                    reward = -10
+                is_terminal = True
+                reward = 20
             else:
                 reward = -10
         
