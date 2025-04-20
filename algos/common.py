@@ -1,4 +1,6 @@
-from abc import abstractmethod
+from abc import abstractmethod, ABC
+from tianshou.policy import BasePolicy
+from tianshou.utils import TensorboardLogger
 from collections import defaultdict
 from gymnasium import Env
 from tqdm import tqdm
@@ -7,6 +9,7 @@ import torch
 import numpy as np
 from typing import Union, Tuple
 import math
+
 
 # TODO: Use this class to define some Agent properties, now useful for type hinting
 class Agent:
@@ -95,40 +98,39 @@ class Scheduler:
     def step(self):
         self.current = max(self.end, self.decay_func(self.current))
         return self.current
-    
 
-class TrainHookFactory:
-    # Class-wide attributes
-    agent = None
-    logger = None
-    eps_start: float = None
-    eps_end: float = None
-    decay_steps: int = None
-    k: float = None
 
-    @classmethod
-    def initialize(cls, hparams: Dict, max_steps: int, agent, logger):
-        cls.agent = agent
-        cls.logger = logger
-        cls.eps_start = hparams["schedule_start"]
-        cls.eps_end = hparams["schedule_end"]
-        decay_fraction = hparams.get("schedule_fraction", 0.67)
-        cls.decay_steps = int(max_steps * decay_fraction)
+class HookFactory(ABC):
+    def __init__(self, agent: BasePolicy, logger: TensorboardLogger):
+        self.agent = agent
+        self.logger = logger
+
+    @abstractmethod
+    def hook(self, epoch: int, global_step: int):
+        """Hook function to be implemented by subclasses."""
+        pass
+
+
+class EpsilonDecayHookFactory(HookFactory):
+    def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger):
+        super().__init__(agent, logger)
+
+        self.eps_start = hparams["schedule_start"]
+        self.eps_end = hparams["schedule_end"]
+        decay_fraction = hparams["schedule_fraction"]
+        self.decay_steps = int(max_steps * decay_fraction)
+
         delta = 1e-3
-        cls.k = -math.log(delta / (cls.eps_start - cls.eps_end)) / cls.decay_steps
+        self.k = -math.log(delta / (self.eps_start - self.eps_end)) / self.decay_steps
 
-    @staticmethod
-    def train_hook(epoch: int, global_step: int):
-        if TrainHookFactory.agent is None or TrainHookFactory.logger is None:
-            raise RuntimeError("Scheduler must be initialized with agent and logger before calling train_fn.")
-
-        if global_step <= TrainHookFactory.decay_steps:
-            epsilon = TrainHookFactory.eps_end + (TrainHookFactory.eps_start - TrainHookFactory.eps_end) * math.exp(-TrainHookFactory.k * global_step)
+    def hook(self, epoch: int, global_step: int):
+        if global_step <= self.decay_steps:
+            epsilon = self.eps_end + (self.eps_start - self.eps_end) * math.exp(-self.k * global_step)
         else:
-            epsilon = TrainHookFactory.eps_end
+            epsilon = self.eps_end
 
-        TrainHookFactory.agent.set_eps(epsilon)
-        TrainHookFactory.logger.write("train/env_step", global_step, {"epsilon": TrainHookFactory.agent.eps})
+        self.agent.set_eps(epsilon)
+        self.logger.write("train/env_step", global_step, {"epsilon": self.agent.eps})
 
 
 #TODO: Remove stochastic once SFeatures become real agents

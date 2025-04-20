@@ -1,19 +1,16 @@
 import os
-from typing import Dict
 import torch
-import math
+import gymnasium as gym
 
 from tianshou.policy import DQNPolicy
-from tianshou.data import Batch, Collector, ReplayBuffer
+from tianshou.data import Collector, ReplayBuffer
 from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from tqdm import tqdm
 from algos.nets import FCActionValue
-from algos.common import EpsilonDecayHookFactory
-from envs.taxicab.single_taxicab import FeatureTaxicab
-from utils import setup_experiment, setup_artefact_paths
+from algos.common import TrainHookFactory
+from utils import setup_experiment
 
 
 if __name__ == '__main__':
@@ -27,53 +24,15 @@ if __name__ == '__main__':
     writer = SummaryWriter(store_path)
     logger = TensorboardLogger(writer)
 
-    location_features = [
-        {
-            "colour": "red",
-            "building": "hospital",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "green",
-            "building": "office",
-            "size": "small",
-            "fill": "outlined"
-        },
-        {
-            "colour": "blue",
-            "building": "school",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "yellow",
-            "building": "library",
-            "size": "big",
-            "fill": "filled"
-        }
-    ]
-
-    train_env = FeatureTaxicab(
-        hparams=hparams,
-        location_features=location_features,
-        origin_ind=1,
-        dest_ind=2,
-        store_path=store_path
-    )
-
-    test_env = FeatureTaxicab(
-        hparams=hparams,
-        location_features=location_features,
-        origin_ind=1,
-        dest_ind=2,
-        store_path=store_path
-    )
+    train_env = gym.make(id="Taxi-v3", max_episode_steps=hparams["max_steps"])
+    test_env = gym.make(id="Taxi-v3", max_episode_steps=hparams["max_steps"])
     
     nnet = FCActionValue(
-        in_dim=train_env.observation_space.shape[0],
+        in_dim=1,
         num_actions=int(train_env.action_space.n),
-        h=[64]
+        h=[128],
+        embed_in=train_env.observation_space.n,
+        embed_dim=64
     )
 
     optim = torch.optim.Adam(nnet.parameters(), lr=hparams["step_size"])
@@ -92,7 +51,7 @@ if __name__ == '__main__':
     
     n_epochs = hparams["n_epochs"]
     n_steps = hparams["epoch_steps"]
-    hook_factory = EpsilonDecayHookFactory(hparams=hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    TrainHookFactory.initialize(hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
 
     result = OffpolicyTrainer(
         policy=agent,
@@ -100,7 +59,7 @@ if __name__ == '__main__':
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=200,
         update_per_step=0.25, episode_per_test=100, batch_size=hparams["batch_size"],
-        train_fn=hook_factory.hook,
+        train_fn=TrainHookFactory.train_hook,
         test_fn=lambda epoch, global_step: agent.set_eps(0.05),
         logger=logger
     ).run()

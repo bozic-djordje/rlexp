@@ -116,24 +116,24 @@ hard_test_attributes:
   building: hospital
 
 # Experiment hyper-parameters
-n_epochs: 1000
+n_epochs: 400
 # Update steps in epoch
-epoch_steps: 10000
+epoch_steps: 1000
 # Max steps in episode
-max_steps: 1000
-buffer_size: 1000
+max_steps: 200
+buffer_size: 20000
 seed: 1
 start_pos: null
 
 # Algorithm hyper-parameters
 step_size: 0.001 #alpha
-disc_fact: 0.9 #gamma
+disc_fact: 0.99 #gamma
 batch_size: 64
-warmup_steps: 64
-target_update_steps: 64
+warmup_steps: 500
+target_update_steps: 500
 algo_type: dqn
 hidden_dim: null
 
-schedule_start: 0.5
-schedule_end: 0.1
-schedule_fraction: 0.67
+schedule_start: 1
+schedule_end: 0.05
+schedule_fraction: 0.6
