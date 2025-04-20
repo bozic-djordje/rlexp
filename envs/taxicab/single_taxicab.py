@@ -10,7 +10,7 @@ from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, location_features: List[Dict], origin_ind:int, dest_ind:int, store_path:str):
+    def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         
@@ -54,8 +54,6 @@ class FeatureTaxicab(gym.Env):
         self._agent_location = hparams['start_pos']
         
         self._poi = None
-        self._origin_ind = origin_ind
-        self._dest_ind = dest_ind
         # Passenger spawns in one of four special feature locations, but can be dropped anywhere
         self._passenger_location = None
         self._destination_location = None
@@ -87,6 +85,13 @@ class FeatureTaxicab(gym.Env):
     @property
     def grid_shape(self) -> np.ndarray:
         return self._grid.shape
+    
+    def _generate_poi_indices(self) -> Tuple[int]:
+        origin_ind = self.rng.integers(0, 4)
+        dest_ind = origin_ind
+        while dest_ind == origin_ind:
+            dest_ind = self.rng.integers(0, 4)
+        return origin_ind, dest_ind
         
     def _assign_feature_values(self, location_features:List[Dict]) -> Tuple[List, str]:
         for attr_dict in location_features:
@@ -119,6 +124,7 @@ class FeatureTaxicab(gym.Env):
     def _init_points_of_interest(self, location_features: List[Dict], origin_ind:int, dest_ind:int) -> Dict:
         poi = {}
         i = 0
+        check = 0
 
         for row in range(self._grid.shape[0]):
             for col in range(self._grid.shape[1]):
@@ -126,34 +132,45 @@ class FeatureTaxicab(gym.Env):
                     poi[(row, col)] = location_features[i]
                     if i == origin_ind:
                         self._passenger_location = (row, col)
+                        check += 1
                     if i == dest_ind:
                         self._destination_location = (row, col)
+                        check += 1
                     i += 1
+        assert(check == 2)
+        assert(self._destination_location != self._passenger_location)
         return poi
 
     def reset(self, seed: Optional[int]=None, options: Optional[dict]=None):
         """ Reset the environment and return the initial state number
         """
         super().reset(seed=seed)
+        self._steps = 0
+        info = {}
+        # By default we generate random origin and destination locations
+        origin_ind, dest_ind = self._generate_poi_indices()
+
+        # If the reset was called with options then we update env parameters
+        # before initialising points of interest. This corresponds to the new task!
+        # If origin and destination locations are passed in options, we use those
+        if options and 'location_features' in options:
+            self._location_features = self._assign_feature_values(location_features=options['location_features'])    
+            if 'origin_ind' in options and options['origin_ind'] is not None:
+                origin_ind = options['origin_ind']
+            if 'dest_ind' in options and options['dest_ind'] is not None:
+                dest_ind = options['dest_ind']
+            
+        self._poi = self._init_points_of_interest(
+            location_features=self._location_features,
+             origin_ind=origin_ind, 
+             dest_ind=dest_ind
+        )
+        
         if self._random_start:
             self._agent_location = self._pick_random_start()
         else:
             self._agent_location = self.start_pos
-        self._steps = 0
-        info = {}
-        
-        # If the reset was called with options then we update env parameters
-        # before initialising points of interest. This corresponds to the new task!
-        if options and 'location_features' in options:
-            self._location_features = self._assign_feature_values(location_features=options['location_features'])
-            self._origin_ind = options['origin_ind']
-            self._dest_ind = options['dest_ind']
 
-        self._poi = self._init_points_of_interest(
-            location_features=self._location_features,
-             origin_ind=self._origin_ind, 
-             dest_ind=self._dest_ind
-        )
         assert self._grid[self._agent_location] != 'W'
         return self.obs, info
 
