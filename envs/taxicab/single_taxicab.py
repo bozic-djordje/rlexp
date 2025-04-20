@@ -202,13 +202,15 @@ class FeatureTaxicab(gym.Env):
             if self._passenger_in == 1:
                 is_terminal = True
                 self._passenger_in = 0
-                self._passenger_location = self._agent_location
                 if self._agent_location == self._destination_location:
                     reward = 20
                 else:
                     reward = -10
             else:
                 reward = -10
+        
+        if self._passenger_in:
+            self._passenger_location = self._agent_location
 
         self._steps += 1
         info = {}

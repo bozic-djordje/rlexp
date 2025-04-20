@@ -53,21 +53,36 @@ class FCMultiHead(nn.Module):
 
 
 class FCActionValue(nn.Module):
-    def __init__(self, in_dim, num_actions, h:Tuple=(16)):
+    def __init__(self, in_dim, num_actions, h:Tuple=(16), embed_in: int=None, embed_dim:int=32):
         super(FCActionValue, self).__init__()
-        self.in_dim = in_dim
         self.num_actions = num_actions
 
+        # If the input dimension is 1 (meaning we get state id)
+        # we first embed that id
+        self.use_embed = in_dim == 1
+        if self.use_embed:
+            if embed_in is None:
+                raise ValueError(
+                    "When in_dim == 1 you must supply embed_in "
+                    "(e.g. 500 for Taxi‑v3)."
+                )
+            embed = nn.Embedding(embed_in, embed_dim)
+            self.in_dim = embed_dim
+            modules = [embed]
+        else:
+            self.in_dim = in_dim
+            modules = []
+
         if len(h) == 0:
-            modules = [
+            modules.extend([
                 nn.Linear(self.in_dim, num_actions, dtype=torch.float32),
                 nn.ReLU()
-            ]
+            ])
         else:
-            modules = [
+            modules.extend([
                 nn.Linear(self.in_dim, h[0], dtype=torch.float32),
                 nn.ReLU()
-            ]
+            ])
             for i in range(1, len(h)-1):
                 modules.append(nn.Linear(h[i-1], h[i], dtype=torch.float32))
                 modules.append(nn.ReLU())
@@ -78,10 +93,11 @@ class FCActionValue(nn.Module):
     def forward(self, x, state=None, info={}):
         if not isinstance(x, torch.Tensor):
             x = torch.tensor(x, dtype=torch.float)
+        if self.use_embed:
+            x = x.long().view(-1)
         else:
-            x = x.type(torch.float32)
-        batch = x.shape[0]
-        return self.nnet(x.view(batch, -1)), state
+            x = x.float().view(x.size(0), -1)
+        return self.nnet(x), state
     
 
 if __name__ == "__main__":
