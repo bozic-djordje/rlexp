@@ -11,7 +11,7 @@ from tianshou.utils import TensorboardLogger
 
 from algos.nets import FCActionValue
 from algos.common import EpsilonDecayHookFactory, SaveHookFactory
-from envs.taxicab.single_taxicab import FeatureTaxicab
+from envs.taxicab.feature_taxicab import FeatureTaxicab
 from utils import setup_experiment, setup_artefact_paths
 
 

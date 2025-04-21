@@ -5,10 +5,10 @@ import gymnasium as gym
 import random
 import re
 from copy import deepcopy
-from envs.taxicab.single_taxicab import FeatureTaxicab
+from envs.taxicab.feature_taxicab import FeatureTaxicab
 
 
-class MultitaskTaxicab(gym.Env):
+class LanguageTaxicab(gym.Env):
     def __init__(self, hparams: Dict, store_path:str):
         # Attribute-value combinations allowed in train and (non-hard) test set
         self.nh_attr_combs = deepcopy({name: hparams[name] for name in hparams["attribute_order"]})
@@ -190,7 +190,7 @@ if __name__ == "__main__":
     with open(yaml_path, 'r') as file:
         hparams = yaml.safe_load(file)
 
-    env = MultitaskTaxicab(
+    env = LanguageTaxicab(
         hparams=hparams, 
         store_path=store_path
     )
