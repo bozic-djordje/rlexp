@@ -201,7 +201,7 @@ if __name__ == '__main__':
     import os
     from utils import setup_artefact_paths
     from plotting import plot_scalar
-    from envs.taxicab.mutlitask_taxicab import LanguageTaxicab
+    from envs.taxicab.language_taxicab import LanguageTaxicab
     from nets import FCMultiHead, FCTrunk
     import argparse
     from tqdm import tqdm
