@@ -201,7 +201,7 @@ if __name__ == '__main__':
     import os
     from utils import setup_artefact_paths
     from plotting import plot_scalar
-    from envs.taxicab.mutlitask_taxicab import MultitaskTaxicab
+    from envs.taxicab.mutlitask_taxicab import LanguageTaxicab
     from nets import FCMultiHead, FCTrunk
     import argparse
     from tqdm import tqdm
@@ -221,7 +221,7 @@ if __name__ == '__main__':
         hparams = yaml.safe_load(file)
     weights_path = os.path.join(store_path, f'{hparams["algo_type"]}_weights.pt')
 
-    env = MultitaskTaxicab(
+    env = LanguageTaxicab(
         hparams=hparams, 
         store_path=store_path
     )
