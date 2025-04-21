@@ -119,7 +119,9 @@ class LanguageTaxicab(gym.Env):
         options["origin_ind"] = self._origin_ind
         options["dest_ind"] = self._dest_ind
         self._task_num += 1
-        return self._env.reset(seed, options)
+        _, info = self._env.reset(seed, options)
+        # Hack to include instruction into obs
+        return self.obs, info
     
     def step(self, action):
         _, reward, is_terminal, truncated, info = self._env.step(action=action)
