@@ -8,6 +8,12 @@ from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+DEFAULT_FEATURES = [
+    { "colour": "red",    "building": "hospital", "size": "big",   "fill": "filled"   },
+    { "colour": "blue",   "building": "school",   "size": "big",   "fill": "filled"   },
+    { "colour": "yellow", "building": "library",  "size": "big",   "fill": "filled"   },
+    { "colour": "green",  "building": "office",   "size": "small", "fill": "outlined" },
+]
 
 class FeatureTaxicab(gym.Env):
     def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None):
@@ -361,37 +367,10 @@ if __name__ == '__main__':
     import yaml
     with open(yaml_path, 'r') as file:
         hparams = yaml.safe_load(file)
-    
-    location_features = [
-        {
-            "colour": "red",
-            "building": "hospital",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "blue",
-            "building": "school",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "yellow",
-            "building": "library",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "green",
-            "building": "office",
-            "size": "small",
-            "fill": "outlined"
-        }
-    ]
 
     env = FeatureTaxicab(
         hparams=hparams,
-        location_features=location_features,
+        location_features=DEFAULT_FEATURES,
         origin_ind=1,
         dest_ind=2,
         store_path=store_path
@@ -399,10 +378,10 @@ if __name__ == '__main__':
     env.store_frame(use_png=True)
     i = 0
     for episode in tqdm(range(hparams['n_episodes'])):
-        origin_ind = np.random.randint(0, len(location_features))
-        dest_ind = (origin_ind + 1) % len(location_features)
+        origin_ind = np.random.randint(0, len(DEFAULT_FEATURES))
+        dest_ind = (origin_ind + 1) % len(DEFAULT_FEATURES)
         options = {
-            "location_features": location_features,
+            "location_features": DEFAULT_FEATURES,
             "origin_ind": origin_ind, 
             "dest_ind": dest_ind
         }
