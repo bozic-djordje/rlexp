@@ -17,7 +17,7 @@ from utils import setup_experiment, setup_artefact_paths
 
 if __name__ == '__main__':
     script_path = os.path.abspath(__file__)
-    experiment_name, store_path, yaml_path = setup_experiment(script_path=script_path)
+    experiment_name, store_path, yaml_path, _ = setup_experiment(script_path=script_path)
     
     import yaml
     with open(yaml_path, 'r') as file:

@@ -28,6 +28,7 @@ def setup_experiment(script_path:str, base_name:str=None, save_yaml:bool=True):
         base_name = os.path.basename(script_path).replace('.py', '')
     experiment_name = f'{base_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     
+    precomputed_path = os.path.join(store_path, 'precomputed')
     store_path = os.path.join(store_path, experiment_name)
     if not os.path.isdir(store_path):
         os.mkdir(store_path)
@@ -35,7 +36,7 @@ def setup_experiment(script_path:str, base_name:str=None, save_yaml:bool=True):
     if save_yaml is True:
         shutil.copy2(yaml_path, store_path)
 
-    return experiment_name, store_path, yaml_path
+    return experiment_name, store_path, yaml_path, precomputed_path
 
 def load_and_resize_png(path:str, cell_size:int, keep_alpha:bool=False) -> np.ndarray:
     """

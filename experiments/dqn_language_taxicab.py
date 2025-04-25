@@ -9,15 +9,19 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.nets import FCActionValue
+from algos.nets import ConcatActionValue, precompute_instruction_embeddings
 from algos.common import EpsilonDecayHookFactory, SaveHookFactory
-from envs.taxicab.feature_taxicab import FeatureTaxicab
-from utils import setup_experiment, setup_artefact_paths
+from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
+from utils import setup_experiment
 
 
 if __name__ == '__main__':
+    
     script_path = os.path.abspath(__file__)
-    experiment_name, store_path, yaml_path = setup_experiment(script_path=script_path)
+    experiment_name, store_path, yaml_path, precomp_path = setup_experiment(script_path=script_path)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
     import yaml
     with open(yaml_path, 'r') as file:
@@ -26,54 +30,36 @@ if __name__ == '__main__':
     writer = SummaryWriter(store_path)
     logger = TensorboardLogger(writer)
 
-    location_features = [
-        {
-            "colour": "red",
-            "building": "hospital",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "green",
-            "building": "office",
-            "size": "small",
-            "fill": "outlined"
-        },
-        {
-            "colour": "blue",
-            "building": "school",
-            "size": "big",
-            "fill": "filled"
-        },
-        {
-            "colour": "yellow",
-            "building": "library",
-            "size": "big",
-            "fill": "filled"
-        }
-    ]
-
-    train_env = FeatureTaxicab(
-        hparams=hparams,
-        location_features=location_features,
+    env_factory = LanguageTaxicabFactory(
+        hparams=hparams, 
         store_path=store_path
     )
-
-    test_env = FeatureTaxicab(
-        hparams=hparams,
-        location_features=location_features,
-        store_path=store_path
-    )
+    train_env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
+    test_env: LanguageTaxicab = env_factory.get_env(set_id='HOLDOUT')
     
-    nnet = FCActionValue(
-        in_dim=train_env.observation_space.shape[0],
+    all_instructions = env_factory.get_all_instructions()
+
+    # TODO: This will be a relatively common op, see if to extract it into the function.
+    embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+    if os.path.isfile(embedding_path):
+        precomp_embeddings = torch.load(embedding_path, map_location=device)
+    else:
+        precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
+        torch.save(precomp_embeddings, embedding_path)
+    
+    in_dim = train_env.observation_space.shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
+    
+    nnet = ConcatActionValue(
+        in_dim=in_dim,
         num_actions=int(train_env.action_space.n),
-        h=hparams["hidden_dim"]
+        h=hparams["hidden_dim"],
+        precom_embeddings=precomp_embeddings,
+        device=device
     )
 
     optim = torch.optim.Adam(nnet.parameters(), lr=hparams["step_size"])
     rb = ReplayBuffer(size=hparams['buffer_size'])
-    
+
     agent = DQNPolicy(
         model=nnet, 
         optim=optim,

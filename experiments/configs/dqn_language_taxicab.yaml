@@ -22,8 +22,6 @@ size: [big, small]
 fill: [filled, outlined]
 
 location_formulation:
-  
-location_formulation:
   - colour size fill building
   - colour fill size building
   - size colour fill building
@@ -37,16 +35,15 @@ location_formulation:
   # - building which is fill colour size
   # - building which is fill size colour
 
-
 passenger_formulation:
   - passenger
-  - client
+  # - client
   # - traveler
   # - comuter
 
 drive_formulation:
   - go
-  - head
+  # - head
   # - drive
   # - ride
 
@@ -72,3 +69,26 @@ use_fill_map: False
 hard_test_attributes:
   colour: green
   building: hospital
+
+# Experiment hyper-parameters
+n_epochs: 500
+# Update steps in epoch
+epoch_steps: 1000
+# Max steps in episode
+max_steps: 200
+buffer_size: 20000
+seed: 1
+start_pos: null
+
+# Algorithm hyper-parameters
+hidden_dim: [1024, 256]
+step_size: 0.001 #alpha
+disc_fact: 0.99 #gamma
+batch_size: 64
+warmup_steps: 500
+target_update_steps: 500
+algo_type: dqn
+
+schedule_start: 1
+schedule_end: 0.05
+schedule_fraction: 0.8
