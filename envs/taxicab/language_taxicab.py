@@ -44,8 +44,12 @@ class LanguageTaxicab(gym.Env):
         return self._task_num
 
     @property
-    def obs(self) -> gym.spaces.MultiDiscrete:
-        return self._env.obs, self._instr
+    def obs(self) -> np.ndarray:
+        # This conversion is necessary because we use mixed types
+        # obs[-1] is a string, while the rest should be interpreted as integers
+        obs_list = self._env.obs.tolist()
+        obs_list.append(self._instr)
+        return np.array(obs_list, dtype=str)
         
     @property 
     def wall_mask(self) -> np.ndarray:
@@ -210,6 +214,75 @@ class LanguageTaxicabFactory:
                             holdout_adj_combs.append(ftr_comb)
         return common_adj_combs, holdout_adj_combs
     
+    def get_all_instructions(self):
+        
+        all_adjective_combs = deepcopy(self._common_adj_combs)
+        all_adjective_combs.extend(deepcopy(self._holdout_adj_combs))
+        all_adjective_combs.extend(deepcopy(self._hard_holdout_adj_combs))
+        
+        partials_1 = []
+        for instr in self._synonyms["instruction"]:
+            text = deepcopy(instr["phrase"])
+            partials_1.append(text)
+        
+        partials_2 = []
+        for p1 in partials_1:
+            for passenger in self._synonyms["passenger"]:
+                text = deepcopy(p1)
+                text = re.sub(r"\bpassenger_reference\b", passenger, text)
+                partials_2.append(text)
+        
+        partials_3 = []
+        for p2 in partials_2:
+            drive_count = len(re.findall(r"\bdrive_common\b", p2))
+            if drive_count == 1:
+                for drive in self._synonyms["drive"]:
+                    text = deepcopy(p2)
+                    text = re.sub(r"\bdrive_common\b", drive, text)
+                    partials_3.append(text)
+            else:
+                for drive_1 in self._synonyms["drive"]:
+                    for drive_2 in self._synonyms["drive"]:
+                        text = deepcopy(p2)
+                        text = re.sub(r"\bdrive_common\b", drive_1, text, count=1)
+                        text = re.sub(r"\bdrive_common\b", drive_2, text, count=1)
+                        partials_3.append(text)
+        
+        partials_4 = []
+        for p3 in partials_3:
+            for location_1 in self._synonyms["location"]:
+                for location_2 in self._synonyms["location"]:
+                    text = deepcopy(p3)
+                    text = re.sub(r"\blocation_formulation\b", location_1, text, count=1)
+                    text = re.sub(r"\blocation_formulation\b", location_2, text, count=1)
+                    partials_4.append(text)
+
+        partials_5 = []
+        for p4 in partials_4:
+            for place in all_adjective_combs:
+                text = deepcopy(p4)
+                for key in place.keys():
+                    # This skips attribute values which are non-strings. 
+                    # Their keys will never exist in text, but re will throw an error
+                    if isinstance(place[key], str):
+                        text = re.sub(rf"\b{key}\b", place[key], text, count=1)
+                partials_5.append(text)
+        
+        partials_6 = []
+        for p5 in partials_5:
+            for place in all_adjective_combs:
+                text = deepcopy(p5)
+                for key in place.keys():
+                    # This skips attribute values which are non-strings. 
+                    # Their keys will never exist in text, but re will throw an error
+                    if isinstance(place[key], str):
+                        text = re.sub(rf"\b{key}\b", place[key], text, count=1)
+                partials_6.append(text)
+
+        instructions = set(partials_6)
+
+        return list(instructions)
+
     def get_env(self, set_id:int) -> LanguageTaxicab:
         """Generates LanguageTaxicab environment with possible adjective combinations defined 
         by set_id.
@@ -279,6 +352,8 @@ if __name__ == "__main__":
     print('Hard holdout adjective combinations are: ')
     print(env_factory.hard_holdout_adjective_combinations)
     print()
+
+    possible_instrs = env_factory.get_all_instructions()
 
     env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
     
