@@ -1,94 +1,100 @@
-grid:
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-  - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
-  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
-  - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-# If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
-pomdp: false 
-start_pos: null
-slip_chance: 0
-seed: 1
-train_test_split: [0.8, 0.2]
+general:
+  seed: 1
 
-# Attributes that should be grounded.
-# Attributes that have a direct representation
-attribute_order: ["colour", "building", "size", "fill"]
-colour: [green, blue, red, yellow]
-building: [hospital, school, library, office]
-size: [big, small]
-fill: [filled, outlined]
+environment:
+  grid:
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
+    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
+    - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
+  pomdp: true 
+  max_steps: 200
+  start_pos: null
+  slip_chance: 0
+  seed: 1
+  train_test_split: [0.8, 0.2]
 
-location_formulation:
-  - colour size fill building
-  - colour fill size building
-  - size colour fill building
-  - size fill colour building
-  - fill colour size building
-  - fill size colour building
-  # - building which is colour size fill
-  # - building which is colour fill size
-  # - building which is size colour fill
-  # - building which is size fill colour
-  # - building which is fill colour size
-  # - building which is fill size colour
+  # Attributes that should be grounded.
+  # Attributes that have a direct representation
+  attribute_order: ["colour", "building", "size", "fill"]
+  colour: [green, blue, red, yellow]
+  building: [hospital, school, library, office]
+  size: [big, small]
+  fill: [filled, outlined]
 
-passenger_formulation:
-  - passenger
-  # - client
-  # - traveler
-  # - comuter
+  location_formulation:
+    - colour size fill building
+    - colour fill size building
+    - size colour fill building
+    - size fill colour building
+    - fill colour size building
+    - fill size colour building
+    # - building which is colour size fill
+    # - building which is colour fill size
+    # - building which is size colour fill
+    # - building which is size fill colour
+    # - building which is fill colour size
+    # - building which is fill size colour
 
-drive_formulation:
-  - go
-  # - head
-  # - drive
-  # - ride
+  passenger_formulation:
+    - passenger
+    # - client
+    # - traveler
+    # - comuter
 
-goal_formulation:
-  - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
-    goal_first: false
-  - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
-    goal_first: true
-  # - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
-  #   goal_first: false
-  # - phrase: a ride was requested to location_formulation. the pickup location is at location_formulation.
-  #   goal_first: true
+  drive_formulation:
+    - go
+    # - head
+    # - drive
+    # - ride
 
-default_feature: "0" 
+  goal_formulation:
+    - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
+      goal_first: false
+    - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
+      goal_first: true
+    # - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
+    #   goal_first: false
+    # - phrase: a ride was requested to location_formulation. the pickup location is at location_formulation.
+    #   goal_first: true
 
-use_color_map: True
-use_building_map: True
-use_size_map: True
-use_fill_map: False
+  default_feature: "0" 
 
-# 8 combinations total with green hospital being fixed
-# green hospitals must not exist in the train or test sets
-hard_test_attributes:
-  colour: green
-  building: hospital
+  use_color_map: True
+  use_building_map: True
+  use_size_map: True
+  use_fill_map: False
 
-# Experiment hyper-parameters
-n_epochs: 500
-# Update steps in epoch
-epoch_steps: 1000
-# Max steps in episode
-max_steps: 200
-buffer_size: 20000
-seed: 1
-start_pos: null
+  # 8 combinations total with green hospital being fixed
+  # green hospitals must not exist in the train or test sets
+  hard_test_attributes:
+    colour: green
+    building: hospital
 
-# Algorithm hyper-parameters
-hidden_dim: [1024, 256]
-step_size: 0.001 #alpha
-disc_fact: 0.99 #gamma
-batch_size: 64
-warmup_steps: 500
-target_update_steps: 500
-algo_type: dqn
+experiment:
+  # Experiment hyper-parameters
+  n_epochs: 1000
+  # Update steps in epoch
+  epoch_steps: 1000
+  warmup_steps: 500
+  step_per_collect: 200
+  update_per_step: 0.25
+  
+  # Algorithm hyper-parameters
+  hidden_dim: [1024, 256]
+  step_size: 0.001 #alpha
+  disc_fact: 0.99 #gamma
+  batch_size: 64
+  buffer_size: 20000
+  target_update_steps: 500
+  episode_per_test: 100
 
-schedule_start: 1
-schedule_end: 0.05
-schedule_fraction: 0.8
+  # Exploration rate parameters
+  epsilon_start: 1
+  epsilon_end: 0.05
+  epsilon_fraction: 0.8
+  test_epsilon: 0.05

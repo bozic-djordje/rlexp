@@ -115,9 +115,9 @@ class EpsilonDecayHookFactory(EpochHookFactory):
     def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger):
         super().__init__(agent, logger)
 
-        self.eps_start = hparams["schedule_start"]
-        self.eps_end = hparams["schedule_end"]
-        decay_fraction = hparams["schedule_fraction"]
+        self.eps_start = hparams["epsilon_start"]
+        self.eps_end = hparams["epsilon_end"]
+        decay_fraction = hparams["epsilon_fraction"]
         self.decay_steps = int(max_steps * decay_fraction)
 
         delta = 1e-3
