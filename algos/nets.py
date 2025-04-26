@@ -156,13 +156,11 @@ class ConcatActionValue(FCActionValue):
         self.to(self.device)
 
     def forward(self, x, state=None, info={}):
-        numerical_features = x[:, :-1]
-        if isinstance(numerical_features, np.ndarray) and numerical_features.dtype == object:
-            numerical_features = numerical_features.astype(float)
+        numerical_features = x.features
         if not isinstance(numerical_features, torch.Tensor):
             numerical_features = torch.tensor(numerical_features, dtype=torch.float).to(self.device)
 
-        instructions = x[:, -1]  # Last column contains instructions
+        instructions = x.instr
         # Retrieve embeddings for instructions
         instruction_embeddings = torch.stack(
             [self.precomp_embed[instr] for instr in instructions]

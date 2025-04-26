@@ -97,6 +97,7 @@ class FeatureTaxicab(gym.Env):
         dest_ind = origin_ind
         while dest_ind == origin_ind:
             dest_ind = self.rng.integers(0, 4)
+        assert(origin_ind != dest_ind)
         return origin_ind, dest_ind
         
     def _assign_feature_values(self, location_features:List[Dict]) -> Tuple[List, str]:

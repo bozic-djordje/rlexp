@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple
 import os
 import numpy as np
 import gymnasium as gym
+from gymnasium import spaces
 import random
 import re
 from copy import deepcopy
@@ -27,6 +28,10 @@ class LanguageTaxicab(gym.Env):
         self._location_synonyms = synonyms["location"]
         
         self._task_num = 0
+        self._observation_space = spaces.Dict({
+            "features": spaces.MultiDiscrete([10] * 11),
+            "instr": spaces.Text(max_length=100)
+            })
 
         # These will be properly initialised after reset()
         self._task = None
@@ -45,11 +50,11 @@ class LanguageTaxicab(gym.Env):
 
     @property
     def obs(self) -> np.ndarray:
-        # This conversion is necessary because we use mixed types
-        # obs[-1] is a string, while the rest should be interpreted as integers
-        obs_list = self._env.obs.tolist()
-        obs_list.append(self._instr)
-        return np.array(obs_list, dtype=str)
+        ret = {
+            "features": self._env.obs,
+            "instr": self._instr
+        }
+        return ret
         
     @property 
     def wall_mask(self) -> np.ndarray:
@@ -65,7 +70,7 @@ class LanguageTaxicab(gym.Env):
     
     @property
     def observation_space(self):
-        return self._env.observation_space
+        return self._observation_space
     
     def _sample_instructions(self, adjective_combs:List):
         instr = self._env.rng.choice(self._instr_synonyms)
@@ -88,15 +93,18 @@ class LanguageTaxicab(gym.Env):
                     text = re.sub(rf"\b{key}\b", attr_comb[key], text, count=1) 
         return text
     
+    # TODO: This creates the issue because origin == destination
     def _sample_task(self) -> Tuple[Dict, str]:
         common_adj_combs = deepcopy(self._common_adj_combs)
         poi_1 = self._env.rng.choice(common_adj_combs, replace=False)
+        common_adj_combs.remove(poi_1)
 
         if self._hold_adj_combs:
             hold_adj_combs = deepcopy(self._hold_adj_combs)
             poi_2 = self._env.rng.choice(hold_adj_combs, replace=False)
         else:
             poi_2 = self._env.rng.choice(common_adj_combs, replace=False)
+            common_adj_combs.remove(poi_2)
         
         if self._env.rng.random() > 0.5:
             destination = poi_1
@@ -105,8 +113,11 @@ class LanguageTaxicab(gym.Env):
             destination = poi_2
             origin = poi_1
         
+        assert(origin != destination)
         conf_1 = self._env.rng.choice(common_adj_combs, replace=False)
+        common_adj_combs.remove(conf_1)
         conf_2 = self._env.rng.choice(common_adj_combs, replace=False)
+        common_adj_combs.remove(conf_2)
         task = [origin, destination, conf_1, conf_2]
         
         self._env.rng.shuffle(task)

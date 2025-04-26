@@ -47,7 +47,7 @@ if __name__ == '__main__':
         precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
         torch.save(precomp_embeddings, embedding_path)
     
-    in_dim = train_env.observation_space.shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
+    in_dim = train_env.observation_space["features"].shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
     
     nnet = ConcatActionValue(
         in_dim=in_dim,
