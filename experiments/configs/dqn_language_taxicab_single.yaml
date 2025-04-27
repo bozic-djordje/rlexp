@@ -7,11 +7,11 @@ experiment:
   # Which variables are to be interpreted as Optuna float delimiters
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
-  n_trials: 20
+  n_trials: 1
   
-  n_epochs: 10
+  n_epochs: 1000
   # Number of update steps in epoch
-  epoch_steps: 100
+  epoch_steps: 1000
   warmup_steps: 500
 
   # How many steps in the environment will be called before the agent enters the update phase.
@@ -20,20 +20,20 @@ experiment:
   step_per_collect: 200
   # How many updates will happen to the network per step in the environment
   # For 0.25 update happens every 4 steps
-  update_per_step: [0.05, 0.5]
+  update_per_step: 0.25
   
   # Algorithm hyper-parameters
-  hidden_dim: [[1024, 256], [1024, 512, 256], [1024, 1024, 512, 256]]
-  step_size: [1e-5, 1e-2]
-  batch_size: [64, 128, 256]
+  hidden_dim: [1024, 256]
+  step_size: 0.001
+  batch_size: 64
   buffer_size: 20000
-  target_update_steps: [500, 1000]
+  target_update_steps: 500
   episode_per_test: 100
 
   # Exploration rate parameters
   epsilon_start: 1
   epsilon_end: 0.05
-  epsilon_fraction: [0.6, 0.8]
+  epsilon_fraction: 0.8
   test_epsilon: 0.05
 
 # Environment hyper-parameters are fixed
