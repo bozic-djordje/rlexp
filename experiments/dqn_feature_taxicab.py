@@ -13,15 +13,17 @@ from algos.nets import FCActionValue
 from algos.common import EpsilonDecayHookFactory, SaveHookFactory
 from envs.taxicab.feature_taxicab import FeatureTaxicab
 from utils import setup_experiment, setup_artefact_paths
+from yaml_utils import load_yaml, save_yaml
 
 
 if __name__ == '__main__':
     script_path = os.path.abspath(__file__)
-    experiment_name, store_path, yaml_path, _ = setup_experiment(script_path=script_path)
+    store_path, config_path = setup_artefact_paths(script_path=script_path)
+    experiment_name, store_path, _ = setup_experiment(store_path=store_path, config_path=config_path)
     
     import yaml
-    with open(yaml_path, 'r') as file:
-        hparams = yaml.safe_load(file)
+    with open(config_path, 'r') as file:
+        hparams = load_yaml(file)
     
     writer = SummaryWriter(store_path)
     logger = TensorboardLogger(writer)

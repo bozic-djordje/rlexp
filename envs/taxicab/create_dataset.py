@@ -61,7 +61,7 @@ if __name__ == "__main__":
     from copy import deepcopy
 
     script_path = os.path.abspath(__file__)
-    store_path, yaml_path = setup_artefact_paths(script_path=script_path, script_name="taxicab.py")
+    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="taxicab.py")
     
     import yaml
     with open(yaml_path, 'r') as file:

@@ -1,7 +1,5 @@
 import os
-from typing import Dict
 import torch
-import yaml
 import optuna, pickle
 
 from tianshou.policy import DQNPolicy
@@ -13,18 +11,30 @@ from tianshou.utils import TensorboardLogger
 from algos.nets import ConcatActionValue, precompute_instruction_embeddings
 from algos.common import EpsilonDecayHookFactory, SaveHookFactory
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
-from utils import setup_experiment
+from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
+from yaml_utils import load_yaml, save_yaml
 
 
-def experiment(trial: optuna.trial.Trial=None) -> float:
-    script_path = os.path.abspath(__file__)
-    experiment_name, store_path, yaml_path, precomp_path = setup_experiment(script_path=script_path)
-    with open(yaml_path, 'r') as file:
-        hparams = yaml.safe_load(file)
+def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> float:
+    _, store_path, precomp_path = setup_experiment(store_path=store_path, config_path=config_path)
+    with open(config_path, 'r') as file:
+        hparams = load_yaml(file)
 
-    exp_hparams = hparams["experiment"] if "experiment" in hparams else hparams
+    # We may perform a search on experiment hyper-parameters using Optuna
+    exp_hparams = hparams["experiment"]
+    if trial is not None:
+        exp_hparams = sample_hyperparams(trial=trial, hparams=exp_hparams)
+    # Environment hyper-parameters are fixed
     env_hparams = hparams["environment"] if "environment" in hparams else hparams
-    seed = hparams["general"]["seed"]
+    
+    sampled_config = {
+        "general": hparams["general"],
+        "experiment": exp_hparams, 
+        "environment": env_hparams
+    }
+    sampled_config_pth = os.path.join(store_path, os.path.basename(config_path))
+    save_yaml(data=sampled_config, path=sampled_config_pth)
+
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -41,7 +51,6 @@ def experiment(trial: optuna.trial.Trial=None) -> float:
     
     all_instructions = env_factory.get_all_instructions()
 
-    # TODO: This will be a relatively common op, see if to extract it into the function.
     embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
     if os.path.isfile(embedding_path):
         precomp_embeddings = torch.load(embedding_path, map_location=device)
@@ -66,7 +75,7 @@ def experiment(trial: optuna.trial.Trial=None) -> float:
         model=nnet, 
         optim=optim,
         action_space=train_env.action_space, 
-        discount_factor=exp_hparams["disc_fact"], 
+        discount_factor=env_hparams["disc_fact"], 
         target_update_freq=exp_hparams["target_update_steps"]
     )
 
@@ -90,28 +99,51 @@ def experiment(trial: optuna.trial.Trial=None) -> float:
         logger=logger
     ).run()
     torch.save(agent.state_dict(), f'{store_path}/last_model.pth')
+    return result.best_reward
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description="Run DQN Language Taxicab experiment.")
+    parser.add_argument("--config_name", type=str, default=None, help="Experiment name which needs to match config file name.")
+    args = parser.parse_args()
+
     script_path = os.path.abspath(__file__)
-    _, _, yaml_path, _ = setup_experiment(script_path=script_path)
-    with open(yaml_path, 'r') as file:
-        hparams = yaml.safe_load(file)
+    store_path, config_path = setup_artefact_paths(script_path=script_path, config_name=args.config_name)
+    
+    with open(config_path, 'r') as file:
+        hparams = load_yaml(file)
     
     exp_hparams = hparams["experiment"]
+    n_trials = exp_hparams["n_trials"]
+
+    # Automatically determine if we are running a single experiment or multiple
+    # If multiple, Optuna will be used.
     single_experiment = True
+    special_keys = {"hidden_dim", "float_keys", "log_domain_keys"}
+    # Multiple experiments warranted if there are hyper-parameters with multiple values
     for key, val in exp_hparams.items():
-        if isinstance(val, list) and key != "hidden_dim":
-            single_experiment = False
+        if isinstance(val, list) and key not in special_keys:
+            single_experiment = False   
         
     if not single_experiment:
-        study = optuna.create_study(direction="maximize",
-                                    pruner=optuna.pruners.MedianPruner(
-                                            n_startup_trials=5, n_warmup_steps=5))
-        study.optimize(experiment, n_trials=50, timeout=4*3600)
+        import functools
+        print(f'Optuna: Running {exp_hparams["n_trials"]} experiments to determine the best set of hyper-parameters.')
+        _, store_path = setup_study(store_path=store_path, config_path=config_path)
+        objective = functools.partial(experiment, store_path=store_path, config_path=config_path)
+        study = optuna.create_study(direction="maximize")
+        study.optimize(objective, n_trials=n_trials)
+        
         print("Best trial:", study.best_trial.number, study.best_params)
-        with open("optuna_study.pkl", "wb") as f: pickle.dump(study, f)
+        
+        if args.config_name is None:
+            config_name = os.path.basename(config_path).split(".")[0]
+        else:
+            config_name = args.config_name
+        optuna_path = os.path.join(store_path, f"{config_name}.pkl")
+        with open(optuna_path, "wb") as f: pickle.dump(study, f)
     else:
-        experiment()
+        print(f'Running a single experiment.')
+        experiment(trial=None, store_path=store_path, config_path=config_path)
     
     

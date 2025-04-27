@@ -10,16 +10,17 @@ from tianshou.utils import TensorboardLogger
 
 from algos.nets import FCActionValue
 from algos.common import EpsilonDecayHookFactory
-from utils import setup_experiment
+from utils import setup_artefact_paths, setup_experiment
+from yaml_utils import load_yaml, save_yaml
 
 
 if __name__ == '__main__':
     script_path = os.path.abspath(__file__)
-    experiment_name, store_path, yaml_path, _ = setup_experiment(script_path=script_path)
+    store_path, config_path = setup_artefact_paths(script_path=script_path)
+    experiment_name, store_path, _ = setup_experiment(store_path=store_path, config_path=config_path)
     
-    import yaml
-    with open(yaml_path, 'r') as file:
-        hparams = yaml.safe_load(file)
+    with open(config_path, 'r') as file:
+        hparams = load_yaml(file)
     exp_hparams = hparams["experiment"] if "experiment" in hparams else hparams
     env_hparams = hparams["environment"] if "environment" in hparams else hparams
     
@@ -44,7 +45,7 @@ if __name__ == '__main__':
         model=nnet, 
         optim=optim,
         action_space=train_env.action_space, 
-        discount_factor=exp_hparams["disc_fact"], 
+        discount_factor=env_hparams["disc_fact"], 
         target_update_freq=exp_hparams["target_update_steps"]
     )
 

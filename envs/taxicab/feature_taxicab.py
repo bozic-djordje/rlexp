@@ -363,7 +363,7 @@ if __name__ == '__main__':
     from tqdm import tqdm
 
     script_path = os.path.abspath(__file__)
-    store_path, yaml_path = setup_artefact_paths(script_path=script_path)
+    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="taxicab")
     
     import yaml
     with open(yaml_path, 'r') as file:
