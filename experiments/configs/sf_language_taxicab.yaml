@@ -9,7 +9,7 @@ experiment:
   log_domain_keys: [step_size, update_per_step]
   n_trials: 20
   
-  n_epochs: 1000
+  n_epochs: 800
   # Number of update steps in epoch
   epoch_steps: 1000
   warmup_steps: 500
@@ -23,9 +23,10 @@ experiment:
   update_per_step: [0.05, 0.5]
   
   # Algorithm hyper-parameters
-  hidden_dim: [[1024, 256], [1024, 512, 256], [1024, 1024, 512, 256]]
+  phi_nn_dim: [[256, 768], [256, 512, 768]]
+  psi_nn_dim: [768]
   step_size: [1e-5, 1e-2]
-  batch_size: [64, 128, 256]
+  batch_size: 64
   buffer_size: 20000
   target_update_steps: [500, 1000]
   episode_per_test: 100

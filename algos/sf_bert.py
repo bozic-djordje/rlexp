@@ -1,88 +1,97 @@
 from copy import deepcopy
-from typing import Dict, Tuple, Union
-import numpy as np
+from dataclasses import dataclass
 import torch
 from torch import nn
-from common import Agent, Scheduler
-from tianshou.data.buffer.base import ReplayBuffer, Batch
-from transformers import BertTokenizer, BertModel
+from typing import Dict
+from tianshou.data.buffer.base import Batch
+from tianshou.policy.base import TrainingStats
+from tianshou.policy import BasePolicy
+from torch.distributions import Categorical
 
-class SFBert(Agent):
-    def __init__(self, params: Dict, phi_nn:nn.Module, psi_nn:nn.Module, n_acts:int, rb:ReplayBuffer, device):
-        super().__init__(params=params)
+@dataclass
+class SFBertTrainingStats(TrainingStats):
+    psi_td_loss: float = 0.0
+    phi_l2_loss: float = 0.0
+    epsilon: float = 0.0
+
+
+class SFBert(BasePolicy):
+    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, gamma:float=0.99, seed:float=1., device:torch.device=torch.device("cpu")):
+        super().__init__(action_space=action_space)
         self.device = device
-
-        self.rb: ReplayBuffer = rb
-
-        # Set up BERT and ensure it isn't part of the backprop graph
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.w_nn = BertModel.from_pretrained('bert-base-uncased', output_hidden_states=True).to(self.device)
-        for param in self.w_nn.parameters():
-            param.requires_grad = False
-        self.w_nn.eval()
 
         # Psi(s,a) and Phi(s) share the same base. To obtain Psi(s,*) call phi_s = Phi(s) first
         # and then call Psi(phi_s). This gives Psi(s,a) for all a.
-        self.phi_nn: nn.Module = phi_nn.to(self.device)
-        self.psi_nn: nn.Module = psi_nn.to(self.device)
-        self.psi_nn_t: nn.Module = deepcopy(psi_nn).to(self.device)
+        self.phi_nn: nn.Module = phi_nn
+        self.psi_nn: nn.Module = psi_nn
+        self.psi_nn_t: nn.Module = deepcopy(psi_nn)
         for p in self.psi_nn_t.parameters():
             p.requires_grad = False
         self.psi_nn_t.eval()
-        self.update_target_model()
+        self.sync_weight()
 
-        self.n_acts = n_acts
+        self.precomp_embed = precomp_embeddings
+        for key in self.precomp_embed:
+            self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
 
-        self.instr_text = ""
-        self.w = self.get_embedding(text=self.instr_text)
-
-        self.lr = params["step_size"]
-        self.gamma = params["disc_fact"]
-
-        self.warmup_steps = params["warmup_steps"]
-        self.total_steps = 0
-        self.nn_t_update_steps = params["target_update_steps"]
+        self.lr = lr
+        self.gamma = gamma
+        self.target_update_freq = target_update_freq
+        self._update_count = 0  # Counter for training iterations
         
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
 
-        if params["seed"] is not None:
-            self.rng = torch.Generator().manual_seed(params["seed"])
-        else:
-            self.rng = torch.Generator()
-        self.weight_keys = ['phi_nn', 'psi_nn']
+        # To be set by trainer
+        self.eps = None
+        self.max_action_num = self.action_space.n
+        
+        self.rng = torch.Generator().manual_seed(seed)
+    
+    def set_eps(self, eps: float) -> None:
+        """Set the eps for epsilon-greedy exploration."""
+        self.eps = eps
 
-    def update_target_model(self):
+    def sync_weight(self) -> None:
+        """Synchronize the weight for the target network."""
         self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
+    
+    def instr_to_embedding(self, instrs) -> torch.Tensor:
+        w = torch.stack(
+                [self.precomp_embed[instr] for instr in instrs]
+            ).to(self.device)
+        return w
 
-    def store_transition(self, obs:Union[torch.Tensor, np.ndarray], next_obs:Union[torch.Tensor, np.ndarray], action:Union[torch.Tensor, np.ndarray], reward:Union[torch.Tensor, np.ndarray], terminated: bool, truncated: bool) -> None:
-        obs, next_obs, action, reward, terminated, truncated = super().store_transition(obs, next_obs, action, reward, terminated, truncated)
-        transition = Batch(
-            obs=obs, 
-            act=action, 
-            obs_next=next_obs, 
-            rew=reward, 
-            terminated=terminated, 
-            truncated=truncated, 
-            info=Batch(w=deepcopy(self.w))
-        )
-        self.rb.add(transition)
-
-    def get_embedding(self, text:str) -> torch.Tensor:
-        inputs = self.tokenizer(text, return_tensors='pt').to(self.device)
+    def forward(self, batch, state=None, **kwargs):
         with torch.no_grad():
-            outputs = self.w_nn(**inputs)
-        embeddings = outputs.last_hidden_state
-        embeddings.requires_grad = False
-        return embeddings[0, 0, :].detach()
+            numerical_features = batch.obs.features
+            # Retrieve embeddings for instructions
+            w = self.instr_to_embedding(instrs=batch.obs.instr)
+            
+            # shape: (batch_dim, phi_dim)
+            phi = self.phi_nn(numerical_features)
+            # shape: (batch_dim, num_actions, embedding_dim)
+            psi = self.psi_nn(phi)
+            # shape: (batch_dim, num_actions)
+            q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
+            
+            dist = Categorical(logits=q_logits)
+            act = dist.sample() 
+        return Batch(act=act, state=state, dist=dist)
     
     def psi_update(self, batch: Batch) -> float:
         batch_size = len(batch)
+        
         # Get the active instruction when the transition was played
-        w = batch.info.w
+        w = self.instr_to_embedding(instrs=batch.obs.instr)
+
+        if not isinstance(batch.terminated, torch.Tensor):
+            terminated = torch.tensor(batch.terminated, dtype=torch.int).to(self.device)
+        else:
+            terminated = batch.terminated
         
         with torch.no_grad():
-            phis = self.phi_nn(batch.obs)
+            phis = self.phi_nn(batch.obs.features)
         
         # Get the relevant Psi(s,a) vector for the stored transition. 
         # Psi outputs need to be converted to Q-values to get the optimal action to index Psi outputs
@@ -97,14 +106,14 @@ class SFBert(Agent):
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
         with torch.no_grad():
             # Do the same Psi -> Q conversion and Psi slicing as before, only for the next state in the transition this time
-            phis_next = self.phi_nn(batch.obs_next)
+            phis_next = self.phi_nn(batch.obs_next.features)
             psis_next = self.psi_nn_t(phis_next)
             qs_next = torch.bmm(psis_next, w.unsqueeze(2)).squeeze(2)
             acts_greedy = torch.argmax(qs_next, dim=1).squeeze(-1)
             psis_next_greedy = psis_next[torch.arange(batch_size), acts_greedy, :]
             
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
-            psis_target = phis + (1. - batch.terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
+            psis_target = phis + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
 
         # We calculate the absolute difference between current and target values q values,
         # which is useful info for debugging.
@@ -120,10 +129,15 @@ class SFBert(Agent):
         return torch.mean(td_error).item()
     
     def phi_update(self, batch:Batch) -> float:
-        r_target = batch.rew
-        w = batch.info.w
+        if not isinstance(batch.rew, torch.Tensor):
+            r_target = torch.tensor(batch.rew, dtype=torch.float32).to(self.device)
+        else:
+            r_target = batch.rew
+
+        w = self.instr_to_embedding(instrs=batch.obs.instr)
+        
         r_pred = torch.bmm(
-            self.phi_nn(batch.obs).unsqueeze(1), 
+            self.phi_nn(batch.obs.features).unsqueeze(1), 
             w.unsqueeze(2)
         ).squeeze()
     
@@ -133,187 +147,132 @@ class SFBert(Agent):
         self.phi_optim.step()
         
         return loss.detach().item()
-    
-    def update_target_model(self):
-        self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
 
-    def update(self, batch_size:int=0) -> None:
-        self.total_steps += 1
+    def learn(self, batch, **kwargs):
+        stats = SFBertTrainingStats()
+        stats.epsilon = self.eps
 
-        if self.total_steps < self.warmup_steps:
-            return
-        
-        batch, _ = self.rb.sample(batch_size=batch_size)
-        batch.to_torch(device=self.device, dtype=torch.float32)
-        
+        # Update the target network if needed
+        if self._update_count % self.target_update_freq == 0:
+            self.sync_weight()
+
         td_error = self.psi_update(batch=batch)
-        self.history["psi_td_error"].append(td_error)
+        stats.psi_td_loss = td_error
 
         l2_error = self.phi_update(batch=batch)
-        self.history["phi_l2_error"].append(l2_error)
-
-        if self.total_steps % self.nn_t_update_steps == 0:
-            self.update_target_model()    
+        stats.phi_l2_loss = l2_error
         
-    def store_weights(self):
-        return super().store_weights()
-    
-    def load_weights(self):
-        return super().load_weights()
-    
-    def _select_optimal_action(self, obs: torch.Tensor) -> int:
-        with torch.no_grad():
-            phi = self.phi_nn(obs)
-            psi = self.psi_nn(phi)
-            q = psi.T @ self.w
-            opt_act = torch.argmax(q).squeeze(-1)
-        return opt_act.detach().item()
+        # Increment the iteration counter
+        self._update_count += 1
 
-    def select_action(self, obs: torch.Tensor, instr:str, epsilon:float=None) -> int:
-        # If the instruction has changed, update it
-        if instr != self.instr_text:
-            self.instr_text = instr
-            self.w = self.get_embedding(text=self.instr_text)
+        return stats
 
-        if epsilon is not None and torch.rand(1, generator=self.rng).item() < epsilon:
-            act_ind = torch.randint(low=0, high=self.n_acts, size=(1,)).item()
-        else:
-            if not isinstance(obs, torch.Tensor):
-                obs = torch.tensor(obs, dtype=torch.float32)
-            obs = obs.to(self.device)
-            act_ind = self._select_optimal_action(obs=obs)
-        return act_ind
+    def process_fn(self, batch, buffer, indices):
+        return batch
 
-    def store_weights(self, path: str) -> Tuple:
-        torch.save({'phi_nn': self.phi_nn.state_dict(), 'psi_nn': self.psi_nn.state_dict()}, path)
-        return self.weight_keys
-    
-    def load_weights(self, path:str) -> None:
-        weights = torch.load(path, weights_only=False)
-        self.phi_nn.load_state_dict(weights[self.weight_keys[0]])
-        self.phi_nn = self.phi_nn.to(self.device)
-        self.psi_nn.load_state_dict(weights[self.weight_keys[1]])
-        self.psi_nn = self.psi_nn.to(self.device)
-        return self.weight_keys
-    
+    def exploration_noise(self, act, batch):
+        # Ensure epsilon is provided in the batch
+        batch_size = len(act)
+        # Generate a random mask using torch's RNG
+        rand_mask = torch.rand(batch_size, generator=self.rng) < self.eps
+        rand_mask = rand_mask.cpu().numpy()
+        # Generate random actions using torch's RNG
+        rand_act = torch.randint(0, self.max_action_num, (batch_size,), generator=self.rng)
+        rand_act = rand_act.cpu().numpy()
+        act[rand_mask] = rand_act[rand_mask]
+        return act
+
 
 if __name__ == '__main__':
     import os
-    from utils import setup_artefact_paths
-    from plotting import plot_scalar
-    from envs.taxicab.language_taxicab import LanguageTaxicab
-    from nets import FCMultiHead, FCTrunk
-    import argparse
-    from tqdm import tqdm
+    from utils import setup_artefact_paths, setup_experiment
+    from yaml_utils import load_yaml
+    from torch.utils.tensorboard import SummaryWriter
+    from tianshou.utils import TensorboardLogger
+    from tianshou.data import Collector, ReplayBuffer
+    from tianshou.trainer import OffpolicyTrainer
+    from algos.common import EpsilonDecayHookFactory, SaveHookFactory
+    from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
+    from algos.nets import precompute_instruction_embeddings, FCMultiHead, FCTrunk
+    
+    script_path = os.path.abspath(__file__)
+    store_path, config_path = setup_artefact_paths(script_path=script_path)
+    _, store_path, precomp_path = setup_experiment(store_path=store_path, config_path=config_path)
+    with open(config_path, 'r') as file:
+        hparams = load_yaml(file)
 
-    parser = argparse.ArgumentParser(description="Script with a rerun flag")
-    parser.add_argument("--rerun", action="store_true", default=True, help="Set to rerun the training process (default: True)")
-    args = parser.parse_args()
-    to_rerun = args.rerun
+    exp_hparams = hparams["experiment"]
+    env_hparams = hparams["environment"]
+    seed = hparams["general"]["seed"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    writer = SummaryWriter(store_path)
+    logger = TensorboardLogger(writer)
 
-    script_path = os.path.abspath(__file__)
-    store_path, yaml_path = setup_artefact_paths(script_path=script_path)
-    import yaml
-    with open(yaml_path, 'r') as file:
-        hparams = yaml.safe_load(file)
-    weights_path = os.path.join(store_path, f'{hparams["algo_type"]}_weights.pt')
-
-    env = LanguageTaxicab(
-        hparams=hparams, 
+    env_factory = LanguageTaxicabFactory(
+        hparams=env_hparams, 
         store_path=store_path
     )
+    train_env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
+    test_env: LanguageTaxicab = env_factory.get_env(set_id='HOLDOUT')
+    
+    all_instructions = env_factory.get_all_instructions()
 
-    rb = ReplayBuffer(size=hparams['buffer_size'])
+    embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+    if os.path.isfile(embedding_path):
+        precomp_embeddings = torch.load(embedding_path, map_location=device)
+    else:
+        precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
+        torch.save(precomp_embeddings, embedding_path)
+    
+    in_dim = train_env.observation_space["features"].shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
+    
+    rb = ReplayBuffer(size=exp_hparams['buffer_size'])
     
     phi_nn = FCTrunk(
-        in_dim=env.observation_space.shape[0],
-        h=[256, 768]
+        in_dim=train_env.observation_space["features"].shape[0],
+        h=exp_hparams["phi_nn_dim"],
+        device=device
     )
 
     psi_nn = FCMultiHead(
-        in_dim=768,
-        num_heads=env.action_space.n,
-        h=[768]
-    )
-    
-    agent = SFBert(
-        params=hparams,
-        rb=rb, 
-        n_acts=env.action_space.n,
-        phi_nn=phi_nn,
-        psi_nn=psi_nn,
+        in_dim=exp_hparams["phi_nn_dim"][-1],
+        num_heads=train_env.action_space.n,
+        h=exp_hparams["psi_nn_dim"],
         device=device
     )
     
-    if to_rerun:
-       returns = {}
-       instr_eps = {}
-       for _ in tqdm(range(hparams['n_episodes'])):
-        obs, _ = env.reset(options={"set_id": "train"})
-        instruction = env.instruction
-        if instruction not in instr_eps:
-            instr_eps[instruction] = Scheduler(start=hparams['schedule_start'], end=hparams['schedule_end'], decay_func=lambda step: hparams['schedule_decay'] * step)
-            returns[instruction] = []
-        
-        done = False
-        total_reward = 0
-
-        while not done:
-            epsilon = instr_eps[instruction].step()
-            action = agent.select_action(obs=obs, instr=env.instruction, epsilon=epsilon)
-            next_obs, reward, terminated, truncated, _ = env.step(action)
-            agent.store_transition(
-                obs=obs, 
-                next_obs=next_obs,
-                action=action, 
-                reward=reward, 
-                terminated=terminated, 
-                truncated=truncated
-            )
-            agent.update(batch_size=hparams['batch_size'])
-            
-            # update if the environment is done and the current obs
-            done = terminated or truncated
-            obs = next_obs
-            total_reward += reward
-        
-        returns[instruction].append(total_reward)
-        weight_keys = agent.store_weights(path=weights_path)
-    else:
-        weight_keys = agent.load_weights(path=weights_path)
-    
-    loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_psi_td')
-    plot_scalar(
-        scalars=agent.history["psi_td_error"], 
-        save_path=loss_path,
-        label="Psi TD Bellman Error"
+    agent = SFBert(
+        phi_nn=phi_nn, 
+        psi_nn=psi_nn, 
+        action_space=train_env.action_space,
+        precomp_embeddings=precomp_embeddings,
+        lr=exp_hparams["step_size"],
+        target_update_freq=exp_hparams["target_update_steps"], 
+        gamma=env_hparams["disc_fact"],
+        seed=seed,
+        device=device
     )
 
-    loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_phi_l2')
-    plot_scalar(
-        scalars=agent.history["phi_l2_error"], 
-        save_path=loss_path,
-        label="Phi L2 Loss"
-    )
-
-    # epsilon_path = os.path.join(store_path, f'{hparams["algo_type"]}_epsilon')
-    # plot_scalar(
-    #     scalars=agent.history["epsilon"], 
-    #     save_path=epsilon_path,
-    #     label="Epsilon"
-    # )
-    i = 0
-    for instr, rets in returns.items():
-        loss_path = os.path.join(store_path, f'{hparams["algo_type"]}_return_{i}')
-        plot_scalar(
-            scalars=rets, 
-            save_path=loss_path,
-            label="Returns",
-            title=instr
-        )
-        i+= 1
-
+    train_collector = Collector(agent, train_env, rb, exploration_noise=True)
+    test_collector = Collector(agent, test_env, exploration_noise=True)
     
+    n_epochs = exp_hparams["n_epochs"]
+    n_steps = exp_hparams["epoch_steps"]
+    epoch_hook_factory = EpsilonDecayHookFactory(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+    
+    result = OffpolicyTrainer(
+        policy=agent,
+        train_collector=train_collector,
+        test_collector=test_collector,
+        max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=exp_hparams["step_per_collect"],
+        update_per_step=exp_hparams["update_per_step"], episode_per_test=exp_hparams["episode_per_test"], batch_size=exp_hparams["batch_size"],
+        train_fn=epoch_hook_factory.hook,
+        test_fn=lambda epoch, global_step: agent.set_eps(exp_hparams["test_epsilon"]),
+        save_best_fn=save_hook_factory.hook,
+        logger=logger
+    ).run()
+    torch.save(agent.state_dict(), f'{store_path}/last_model.pth')

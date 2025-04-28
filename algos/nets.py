@@ -49,8 +49,9 @@ def precompute_instruction_embeddings(instructions: List[str], device: torch.dev
 
 
 class FCTrunk(nn.Module):
-    def __init__(self, in_dim:int, h:Tuple[int]=(16)):
+    def __init__(self, in_dim:int, h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
         self.in_dim = in_dim
+        self.device = device
 
         modules = [
             nn.Linear(self.in_dim, h[0], dtype=torch.float32),
@@ -63,17 +64,22 @@ class FCTrunk(nn.Module):
 
         super(FCTrunk, self).__init__()
         self.nnet = nn.Sequential(*modules)
+        self.to(self.device)
 
     def forward(self, x):
-        x = x.type(torch.float32)
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        else:
+            x = x.type(torch.float32).to(self.device)
         return self.nnet(x)
     
 
 class FCMultiHead(nn.Module):
-    def __init__(self, in_dim:int, num_heads:int, h:Tuple[int]=(16)):
+    def __init__(self, in_dim:int, num_heads:int, h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
         super(FCMultiHead, self).__init__()
         self.num_heads = num_heads
         self.in_dim = in_dim
+        self.device = device
 
         self.action_heads = []
         for _ in range(num_heads):
@@ -89,9 +95,13 @@ class FCMultiHead(nn.Module):
 
         # Add separate heads
         self.action_heads = nn.ModuleList(self.action_heads)
+        self.to(self.device)
         
     def forward(self, x):
-        x = x.type(torch.float32)
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        else:
+            x = x.type(torch.float32).to(self.device)
         # Compute each head's output and stack along head dimension
         head_outs = [head(x).unsqueeze(1) for head in self.action_heads]
         return torch.cat(head_outs, dim=1)
