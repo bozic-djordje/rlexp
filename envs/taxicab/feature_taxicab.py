@@ -16,9 +16,11 @@ DEFAULT_FEATURES = [
 ]
 
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None):
+    def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None, easy_mode:bool=False):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
+        # The cab already has the passenger in
+        self._easy_mode = easy_mode
         
         self._feature_map = {}
         self._feature_order = hparams["attribute_order"]
@@ -60,7 +62,7 @@ class FeatureTaxicab(gym.Env):
         self._agent_location = hparams['start_pos']
         
         self._poi = None
-        # Passenger spawns in one of four special feature locations, but can be dropped anywhere
+        # Passenger spawns in one of four special feature locations
         self._passenger_location = None
         self._destination_location = None
         self._passenger_in = 0
@@ -177,6 +179,10 @@ class FeatureTaxicab(gym.Env):
             self._agent_location = self._pick_random_start()
         else:
             self._agent_location = self.start_pos
+        
+        if self._easy_mode:
+            self._passenger_in = 1
+            self._passenger_location = self._agent_location
 
         assert self._grid[self._agent_location] != 'W'
         return self.obs, info
@@ -214,7 +220,7 @@ class FeatureTaxicab(gym.Env):
         assert self._grid[self._agent_location] != 'W'
         
         # Handle non-movement pick up and drop passenger actions
-        if action == 4:
+        if action == 4 and not self._easy_mode:
             if self._passenger_in == 0 and self._passenger_location == self._agent_location:
                 self._passenger_in = 1
             else:
