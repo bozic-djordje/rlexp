@@ -23,11 +23,11 @@ experiment:
   update_per_step: [0.05, 0.5]
   
   # Algorithm hyper-parameters
-  hidden_dim: [[1024, 256], [1024, 512, 256], [1024, 1024, 512, 256]]
+  hidden_dim: [[1024, 256], [1024, 512, 256]]
   step_size: [1e-5, 1e-2]
-  batch_size: [64, 128, 256]
+  batch_size: 64
   buffer_size: 20000
-  target_update_steps: [500, 1000]
+  target_update_steps: 500
   episode_per_test: 100
 
   # Exploration rate parameters
@@ -48,6 +48,7 @@ environment:
     - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   pomdp: true 
+  easy_mode: false
   max_steps: 200
   disc_fact: 0.99 #gamma
   start_pos: null
@@ -65,11 +66,11 @@ environment:
 
   location_formulation:
     - colour size fill building
-    - colour fill size building
-    - size colour fill building
-    - size fill colour building
-    - fill colour size building
-    - fill size colour building
+    # - colour fill size building
+    # - size colour fill building
+    # - size fill colour building
+    # - fill colour size building
+    # - fill size colour building
     # - building which is colour size fill
     # - building which is colour fill size
     # - building which is size colour fill

@@ -13,10 +13,12 @@ class LanguageTaxicab(gym.Env):
     def __init__(self, hparams: Dict, store_path:str, synonyms: Dict, common_adjective_combs: List, holdout_adjective_combs: List=None):
         
         hparams["pomdp"] = True
+        self._easy_mode = hparams["easy_mode"]
         self._env = FeatureTaxicab(
             hparams=hparams,
             location_features=DEFAULT_FEATURES,
-            store_path=store_path
+            store_path=store_path,
+            easy_mode=hparams["easy_mode"]
         )
 
         self._common_adj_combs = common_adjective_combs
@@ -341,7 +343,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     script_path = os.path.abspath(__file__)
-    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="taxicab")
+    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="taxicab_easy")
     
     import yaml
     with open(yaml_path, 'r') as file:
