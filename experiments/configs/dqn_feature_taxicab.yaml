@@ -9,7 +9,7 @@ environment:
     - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   pomdp: false 
-  easy_mode: false
+  easy_mode: true
   max_steps: 200
   start_pos: null
   slip_chance: 0
@@ -136,6 +136,6 @@ experiment:
   target_update_steps: 500
   algo_type: dqn
 
-  schedule_start: 1
-  schedule_end: 0.05
-  schedule_fraction: 0.8
+  epsilon_start: 1
+  epsilon_end: 0.05
+  epsilon_fraction: 0.8
