@@ -7,6 +7,8 @@ experiment:
   # Which variables are to be interpreted as Optuna float delimiters
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
+  # [0, 7, 8, 11]
+  bert_layer_index: [0, 7, 11]
   n_trials: 20
   
   n_epochs: 1000
@@ -66,11 +68,11 @@ environment:
 
   location_formulation:
     - colour size fill building
-    - colour fill size building
-    - size colour fill building
-    - size fill colour building
-    - fill colour size building
-    - fill size colour building
+    # - colour fill size building
+    # - size colour fill building
+    # - size fill colour building
+    # - fill colour size building
+    # - fill size colour building
     # - building which is colour size fill
     # - building which is colour fill size
     # - building which is size colour fill
@@ -91,8 +93,10 @@ environment:
     # - ride
 
   goal_formulation:
-    - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
-      goal_first: false
+    - phrase: drive_common to location_formulation.
+      goal_first: null
+    # - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
+    #   goal_first: false
     # - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
     #   goal_first: true
     # - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
@@ -101,11 +105,6 @@ environment:
     #   goal_first: true
 
   default_feature: "0" 
-
-  use_color_map: True
-  use_building_map: True
-  use_size_map: True
-  use_fill_map: False
 
   # 8 combinations total with green hospital being fixed
   # green hospitals must not exist in the train or test sets

@@ -193,7 +193,7 @@ if __name__ == '__main__':
     from tianshou.trainer import OffpolicyTrainer
     from algos.common import EpsilonDecayHookFactory, SaveHookFactory
     from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
-    from algos.nets import precompute_instruction_embeddings, FCMultiHead, FCTrunk
+    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
     
     script_path = os.path.abspath(__file__)
     store_path, config_path = setup_artefact_paths(script_path=script_path)
@@ -224,10 +224,16 @@ if __name__ == '__main__':
     if os.path.isfile(embedding_path):
         precomp_embeddings = torch.load(embedding_path, map_location=device)
     else:
-        precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
+        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
         torch.save(precomp_embeddings, embedding_path)
     
-    in_dim = train_env.observation_space["features"].shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
+    if "bert_layer_index" in exp_hparams:
+        bert_layer_ind = exp_hparams["bert_layer_index"]
+    else:
+        bert_layer_ind = -1
+    layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
+    
+    in_dim = train_env.observation_space["features"].shape[0] + layer_embeddings[next(iter(layer_embeddings))].shape[0]
     
     rb = ReplayBuffer(size=exp_hparams['buffer_size'])
     
@@ -248,7 +254,7 @@ if __name__ == '__main__':
         phi_nn=phi_nn, 
         psi_nn=psi_nn, 
         action_space=train_env.action_space,
-        precomp_embeddings=precomp_embeddings,
+        precomp_embeddings=layer_embeddings,
         lr=exp_hparams["step_size"],
         target_update_freq=exp_hparams["target_update_steps"], 
         gamma=env_hparams["disc_fact"],
