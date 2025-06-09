@@ -7,7 +7,7 @@ import numpy as np
 from transformers import BertTokenizer, BertModel
 
 
-def precompute_instruction_embeddings(instructions: List[str], device: torch.device, batch_size:int=1024) -> dict:
+def precompute_bert_embeddings(instructions: List[str], device: torch.device, batch_size:int=1024) -> dict:
     """
     Precompute BERT embeddings for a large list of unique instructions in batches.
     Args:
@@ -15,7 +15,7 @@ def precompute_instruction_embeddings(instructions: List[str], device: torch.dev
         device: Torch device to run the computation on.
         batch_size: Number of instructions to process in each batch.
     Returns:
-        A dictionary mapping instructions to their embeddings.
+        A dictionary mapping instructions to their embeddings extracted at each BERT layer.
     """
     # Set up BERT tokenizer and model
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -26,11 +26,11 @@ def precompute_instruction_embeddings(instructions: List[str], device: torch.dev
     bert_model.eval()
 
     # Prepare to store embeddings
-    embeddings = []
+    embeddings = [[] for _ in range(len(instructions))]
     instruction_batches = [instructions[i:i + batch_size] for i in range(0, len(instructions), batch_size)]
 
     # Process instructions in batches
-    for batch in tqdm(instruction_batches, desc=f"Processing {batch_size}-sized batches"):
+    for batch_ind, batch in enumerate(tqdm(instruction_batches, desc=f"Processing {batch_size}-sized batches")):
         # Tokenize and move tokens to the device
         tokens = tokenizer(batch, return_tensors='pt', padding=True, truncation=True)
         tokens = {key: val.to(device) for key, val in tokens.items()}
@@ -38,14 +38,79 @@ def precompute_instruction_embeddings(instructions: List[str], device: torch.dev
         # Compute embeddings
         with torch.no_grad():
             outputs = bert_model(**tokens)
-            batch_embeddings = outputs.last_hidden_state.mean(dim=1)  # Mean pooling over sequence length
-            embeddings.append(batch_embeddings)
-
-    # Concatenate all batch embeddings into a single tensor
-    embeddings = torch.cat(embeddings, dim=0)
+            hidden_states = outputs.hidden_states
+             
+            for instr_ind, instr_hidden_states in enumerate(zip(*hidden_states)):
+                # Stack embeddings for all layers for the current instruction
+                stacked_embeddings = torch.stack(instr_hidden_states, dim=1).cpu()  # Shape: (seq_len, num_layers, embedding_dim)
+                instr_embeddings = stacked_embeddings.mean(dim=0)  # Shape: (num_layers, embedding_dim)
+                embeddings[batch_ind * batch_size + instr_ind] = instr_embeddings
 
     # Create a mapping from instructions to embeddings
     return {instr: embedding for instr, embedding in zip(instructions, embeddings)}
+
+
+def extract_bert_layer_embeddings(embedding_dict: Dict, layer_ind: int) -> Dict:
+    layer_embeddings = {instr: embedding[layer_ind, :] for instr, embedding in embedding_dict.items()}
+    return layer_embeddings
+
+
+class ScalarMix(torch.nn.Module):
+    """
+    Modified from AllenNLP: https://github.com/allenai/allennlp/blob/main/allennlp/modules/scalar_mix.py.
+    Computes a parameterised scalar mixture of N tensors, `mixture = gamma * sum(s_k * tensor_k)`
+    where `s = softmax(w)`, with `w` and `gamma` scalar parameters.
+    """
+
+    def __init__(self, mixture_size: int, initial_scalar_parameters: List[float]=None, trainable: bool=True) -> None:
+        super().__init__()
+        self.mixture_size = mixture_size
+
+        if initial_scalar_parameters is None:
+            initial_scalar_parameters = [0.0] * mixture_size
+        elif len(initial_scalar_parameters) != mixture_size:
+            raise ValueError(
+                "Length of initial_scalar_parameters {} differs "
+                "from mixture_size {}".format(initial_scalar_parameters, mixture_size)
+            )
+
+        self.scalar_parameters = nn.ParameterList(
+            [
+                nn.Parameter(
+                    torch.FloatTensor([initial_scalar_parameters[i]]), requires_grad=trainable
+                )
+                for i in range(mixture_size)
+            ]
+        )
+        self.gamma = nn.Parameter(torch.FloatTensor([1.0]), requires_grad=trainable)
+
+    def forward(self, tensors: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Compute a weighted average of the `tensors`.  The input tensors an be any shape
+        with at least two dimensions, but must all be the same shape.
+
+        When `do_layer_norm=True`, the `mask` is required input.  If the `tensors` are
+        dimensioned  `(dim_0, ..., dim_{n-1}, dim_n)`, then the `mask` is dimensioned
+        `(dim_0, ..., dim_{n-1})`, as in the typical case with `tensors` of shape
+        `(batch_size, timesteps, dim)` and `mask` of shape `(batch_size, timesteps)`.
+
+        When `do_layer_norm=False` the `mask` is ignored.
+        """
+        if len(tensors) != self.mixture_size:
+            raise ValueError(
+                "{} tensors were passed, but the module was initialized to "
+                "mix {} tensors.".format(len(tensors), self.mixture_size)
+            )
+
+        normed_weights = torch.nn.functional.softmax(
+            torch.cat([parameter for parameter in self.scalar_parameters]), dim=0
+        )
+        normed_weights = torch.split(normed_weights, split_size_or_sections=1)
+        
+        pieces = []
+        for weight, tensor in zip(normed_weights, tensors):
+            pieces.append(weight * tensor)
+        return self.gamma * sum(pieces)
 
 
 class FCTrunk(nn.Module):

@@ -12,7 +12,7 @@ from algos.common import EpsilonDecayHookFactory, SaveHookFactory
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
-from algos.nets import precompute_instruction_embeddings, FCMultiHead, FCTrunk
+from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
 
 
 def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> float:
@@ -56,8 +56,14 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     if os.path.isfile(embedding_path):
         precomp_embeddings = torch.load(embedding_path, map_location=device)
     else:
-        precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
+        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
         torch.save(precomp_embeddings, embedding_path)
+    
+    if "bert_layer_index" in exp_hparams:
+        bert_layer_ind = exp_hparams["bert_layer_index"]
+    else:
+        bert_layer_ind = -1
+    layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
     
     rb = ReplayBuffer(size=exp_hparams['buffer_size'])
     
@@ -78,7 +84,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         phi_nn=phi_nn, 
         psi_nn=psi_nn, 
         action_space=train_env.action_space,
-        precomp_embeddings=precomp_embeddings,
+        precomp_embeddings=layer_embeddings,
         lr=exp_hparams["step_size"],
         target_update_freq=exp_hparams["target_update_steps"], 
         gamma=env_hparams["disc_fact"],
@@ -111,7 +117,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description="Run DQN Language Taxicab experiment.")
+    parser = argparse.ArgumentParser(description="Run SF Language Taxicab experiment.")
     parser.add_argument("--config_name", type=str, default=None, help="Experiment name which needs to match config file name.")
     args = parser.parse_args()
 

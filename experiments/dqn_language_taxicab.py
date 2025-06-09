@@ -8,7 +8,7 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.nets import ConcatActionValue, precompute_instruction_embeddings
+from algos.nets import ConcatActionValue, precompute_bert_embeddings, extract_bert_layer_embeddings
 from algos.common import EpsilonDecayHookFactory, SaveHookFactory
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
@@ -55,16 +55,22 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     if os.path.isfile(embedding_path):
         precomp_embeddings = torch.load(embedding_path, map_location=device)
     else:
-        precomp_embeddings = precompute_instruction_embeddings(all_instructions, device=device)
+        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
         torch.save(precomp_embeddings, embedding_path)
     
-    in_dim = train_env.observation_space["features"].shape[0] + precomp_embeddings[next(iter(precomp_embeddings))].shape[0]
+    if "bert_layer_index" in exp_hparams:
+        bert_layer_ind = exp_hparams["bert_layer_index"]
+    else:
+        bert_layer_ind = -1
+    layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
+    
+    in_dim = train_env.observation_space["features"].shape[0] + layer_embeddings[next(iter(layer_embeddings))].shape[0]
     
     nnet = ConcatActionValue(
         in_dim=in_dim,
         num_actions=int(train_env.action_space.n),
         h=exp_hparams["hidden_dim"],
-        precom_embeddings=precomp_embeddings,
+        precom_embeddings=layer_embeddings,
         device=device
     )
 

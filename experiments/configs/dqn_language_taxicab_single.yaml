@@ -102,11 +102,6 @@ environment:
 
   default_feature: "0" 
 
-  use_color_map: True
-  use_building_map: True
-  use_size_map: True
-  use_fill_map: False
-
   # 8 combinations total with green hospital being fixed
   # green hospitals must not exist in the train or test sets
   hard_test_attributes:

@@ -7,6 +7,8 @@ experiment:
   # Which variables are to be interpreted as Optuna float delimiters
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
+  # [0, 7, 8, 11]
+  bert_layer_index: [0, 7, 11]
   n_trials: 20
   
   n_epochs: 1000
@@ -103,11 +105,6 @@ environment:
     #   goal_first: true
 
   default_feature: "0" 
-
-  use_color_map: True
-  use_building_map: True
-  use_size_map: True
-  use_fill_map: False
 
   # 8 combinations total with green hospital being fixed
   # green hospitals must not exist in the train or test sets
