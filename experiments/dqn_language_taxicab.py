@@ -46,8 +46,8 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         hparams=env_hparams, 
         store_path=store_path
     )
-    train_env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
-    test_env: LanguageTaxicab = env_factory.get_env(set_id='HOLDOUT')
+    train_env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN', force_pomdp=False)
+    test_env: LanguageTaxicab = env_factory.get_env(set_id='HOLDOUT', force_pomdp=False)
     
     all_instructions = env_factory.get_all_instructions()
 

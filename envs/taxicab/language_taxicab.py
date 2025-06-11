@@ -10,9 +10,11 @@ from envs.taxicab.feature_taxicab import FeatureTaxicab, DEFAULT_FEATURES
 
 
 class LanguageTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, store_path:str, synonyms: Dict, common_adjective_combs: List, holdout_adjective_combs: List=None):
+    def __init__(self, hparams: Dict, store_path:str, synonyms: Dict, common_adjective_combs: List, holdout_adjective_combs: List=None, force_pomdp:bool=True):
         
-        hparams["pomdp"] = True
+        if force_pomdp:
+            hparams["pomdp"] = True
+        
         self._easy_mode = hparams["easy_mode"]
         self._env = FeatureTaxicab(
             hparams=hparams,
@@ -296,7 +298,7 @@ class LanguageTaxicabFactory:
 
         return list(instructions)
 
-    def get_env(self, set_id:int) -> LanguageTaxicab:
+    def get_env(self, set_id:int, force_pomdp:bool=True) -> LanguageTaxicab:
         """Generates LanguageTaxicab environment with possible adjective combinations defined 
         by set_id.
         Args:
@@ -314,7 +316,8 @@ class LanguageTaxicabFactory:
                 store_path=self._store_path,
                 synonyms=self._synonyms,
                 common_adjective_combs=self._common_adj_combs,
-                holdout_adjective_combs=None
+                holdout_adjective_combs=None,
+                force_pomdp=force_pomdp
             )
         elif set_id == 'HOLDOUT':
             env = LanguageTaxicab(
@@ -322,7 +325,8 @@ class LanguageTaxicabFactory:
                 store_path=self._store_path,
                 synonyms=self._synonyms,
                 common_adjective_combs=self._common_adj_combs,
-                holdout_adjective_combs=self._holdout_adj_combs
+                holdout_adjective_combs=self._holdout_adj_combs,
+                force_pomdp=force_pomdp
             )
         elif set_id == 'HARD_HOLDOUT':
             env = LanguageTaxicab(
@@ -330,7 +334,8 @@ class LanguageTaxicabFactory:
                 store_path=self._store_path,
                 synonyms=self._synonyms,
                 common_adjective_combs=self._common_adj_combs,
-                holdout_adjective_combs=self._hard_holdout_adj_combs
+                holdout_adjective_combs=self._hard_holdout_adj_combs,
+                force_pomdp=force_pomdp
             )
         else:
             raise ValueError(f'set_id={set_id} not in [TRAIN, HOLDOUT, HARD_HOLDOUT].')
