@@ -94,7 +94,7 @@ environment:
 
   goal_formulation:
     - phrase: drive_common to location_formulation.
-      goal_first: null
+      goal_first: true
     # - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
     #   goal_first: false
     # - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.

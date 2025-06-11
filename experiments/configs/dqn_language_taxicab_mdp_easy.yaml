@@ -8,10 +8,10 @@ experiment:
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
   # [0, 7, 8, 11]
-  bert_layer_index: [0, 7, 11]
+  bert_layer_index: 0
   n_trials: 20
   
-  n_epochs: 1000
+  n_epochs: 1500
   # Number of update steps in epoch
   epoch_steps: 1000
   warmup_steps: 500
@@ -94,7 +94,7 @@ environment:
 
   goal_formulation:
     - phrase: drive_common to location_formulation.
-      goal_first: null
+      goal_first: true
     # - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
     #   goal_first: false
     # - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
