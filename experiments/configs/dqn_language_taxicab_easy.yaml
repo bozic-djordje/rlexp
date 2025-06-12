@@ -11,7 +11,7 @@ experiment:
   bert_layer_index: [0, 7, 11]
   n_trials: 20
   
-  n_epochs: 1000
+  n_epochs: 1500
   # Number of update steps in epoch
   epoch_steps: 1000
   warmup_steps: 500
@@ -25,17 +25,17 @@ experiment:
   update_per_step: [0.05, 0.5]
   
   # Algorithm hyper-parameters
-  hidden_dim: [[1024, 256], [1024, 512, 256]]
+  hidden_dim: [[1024, 256]]
   step_size: [1e-5, 1e-2]
-  batch_size: 64
-  buffer_size: 20000
-  target_update_steps: 500
-  episode_per_test: 100
+  batch_size: 256
+  buffer_size: 500000
+  target_update_steps: 1000
+  episode_per_test: 3
 
   # Exploration rate parameters
   epsilon_start: 1
   epsilon_end: 0.05
-  epsilon_fraction: [0.6, 0.8]
+  epsilon_fraction: 0.6
   test_epsilon: 0.05
 
 # Environment hyper-parameters are fixed
