@@ -33,7 +33,7 @@ class LanguageTaxicab(gym.Env):
         
         self._task_num = 0
         self._observation_space = spaces.Dict({
-            "features": spaces.MultiDiscrete([10] * 11),
+            "features": spaces.MultiDiscrete([10] * 9),
             "instr": spaces.Text(max_length=100)
             })
 
@@ -94,22 +94,34 @@ class LanguageTaxicab(gym.Env):
                 # This skips attribute values which are non-strings. 
                 # Their keys will never exist in text, but re will throw an error
                 if isinstance(attr_comb[key], str):
-                    text = re.sub(rf"\b{key}\b", attr_comb[key], text, count=1) 
+                    text = re.sub(rf"\b{key}\b", attr_comb[key], text, count=1)
         return text
-    
+
+    def _sample_adj_comb(self, adj_combs: List) -> Tuple:
+        poi = self._env.rng.choice(adj_combs, replace=False)
+        adj_combs.remove(poi)
+
+        # In easy mode each feature must not be present more than once on a map
+        # This removes all addj combs with features already present in poi
+        if self._easy_mode:
+            adj_combs = [addj_comb for addj_comb in adj_combs 
+                                if not any(addj_comb[k] == poi[k] for k in addj_comb.keys())]
+        return poi, adj_combs
+
     # TODO: This creates the issue because origin == destination
     def _sample_task(self) -> Tuple[Dict, str]:
         common_adj_combs = deepcopy(self._common_adj_combs)
-        poi_1 = self._env.rng.choice(common_adj_combs, replace=False)
-        common_adj_combs.remove(poi_1)
-
+        
         if self._hold_adj_combs:
             hold_adj_combs = deepcopy(self._hold_adj_combs)
-            poi_2 = self._env.rng.choice(hold_adj_combs, replace=False)
+            poi_1 = self._env.rng.choice(hold_adj_combs, replace=False)
+            if self._easy_mode:
+                common_adj_combs = [addj_comb for addj_comb in common_adj_combs 
+                                if not any(addj_comb[k] == poi_1[k] for k in addj_comb.keys())]
         else:
-            poi_2 = self._env.rng.choice(common_adj_combs, replace=False)
-            common_adj_combs.remove(poi_2)
-        
+            poi_1, common_adj_combs = self._sample_adj_comb(adj_combs=common_adj_combs)
+
+        poi_2, common_adj_combs = self._sample_adj_comb(adj_combs=common_adj_combs)
         if self._env.rng.random() > 0.5:
             destination = poi_1
             origin = poi_2
@@ -118,10 +130,8 @@ class LanguageTaxicab(gym.Env):
             origin = poi_1
         
         assert(origin != destination)
-        conf_1 = self._env.rng.choice(common_adj_combs, replace=False)
-        common_adj_combs.remove(conf_1)
-        conf_2 = self._env.rng.choice(common_adj_combs, replace=False)
-        common_adj_combs.remove(conf_2)
+        conf_1, common_adj_combs = self._sample_adj_comb(adj_combs=common_adj_combs)
+        conf_2, common_adj_combs = self._sample_adj_comb(adj_combs=common_adj_combs)
         task = [origin, destination, conf_1, conf_2]
         
         self._env.rng.shuffle(task)
@@ -160,19 +170,17 @@ class LanguageTaxicabFactory:
 
         # Attribute-value combinations allowed in train and (non-hard) test set
         self._nh_attr_combs = deepcopy({name: hparams[name] for name in hparams["attribute_order"]})
-        # Attribute-value combinations that can be varied in the hard test set (others are fixed)
-        self._h_var_attr_combs: Dict = deepcopy(self._nh_attr_combs)
-        self._h_fix_attr_combs: Dict = hparams["hard_test_attributes"]
-        self._train_test_split = hparams["train_test_split"]
-        htest_task = {}
+        all_adj_combs = self._get_all_adj_combinations()
         
-        for attr_name, attr_value in self._h_fix_attr_combs.items():
-            self._nh_attr_combs[attr_name].remove(attr_value)
-            self._h_var_attr_combs.pop(attr_name)
-            htest_task[attr_name] = attr_value
+        self._common_adj_combs, self._holdout_adj_combs, self._hard_holdout_adj_combs = self.split_datasets(
+            all_adj_combinations=all_adj_combs, 
+            split=hparams["train_test_split"], 
+            hard_attrs=hparams["hard_test_attributes"]
+        )
         
-        self._hard_holdout_adj_combs = self._get_hard_adjective_combinations(htest_template=htest_task)
-        self._common_adj_combs, self._holdout_adj_combs = self._get_common_and_holdout_adjective_combinations()
+        if "easy_mode" in hparams and hparams["easy_mode"]:
+            self._common_adj_combs.extend(self._holdout_adj_combs)
+            self._common_adj_combs.extend(self._hard_holdout_adj_combs)
         
         # Natural language options. At the beginning of each episode the exact instruction
         # will be constructed by sampling from these options.
@@ -194,41 +202,35 @@ class LanguageTaxicabFactory:
     @property
     def hard_holdout_adjective_combinations(self) -> List:
         return self._hard_holdout_adj_combs
-    
-    def _get_hard_adjective_combinations(self, htest_template: Dict) -> List:
-        hhold_ftr_combos = []
-        # This code expects exactly two attr names
-        attr_names = list(self._h_var_attr_combs.keys())
-        for attr_value_0 in self._h_var_attr_combs[attr_names[0]]:
-            for attr_value_1 in self._h_var_attr_combs[attr_names[1]]:
-                sample = deepcopy(htest_template)
-                sample[attr_names[0]] = attr_value_0
-                sample[attr_names[1]] = attr_value_1
-                hhold_ftr_combos.append(sample)          
-        return hhold_ftr_combos
 
-    def _get_common_and_holdout_adjective_combinations(self) -> Tuple[List]:
-        common_adj_combs = []
-        holdout_adj_combs = []
+    def _get_all_adj_combinations(self) -> Tuple[List]:
+        all_adj_combs = []
 
         attr_names = list(self._nh_attr_combs.keys())
         for attr_value_0 in self._nh_attr_combs[attr_names[0]]:
             for attr_value_1 in self._nh_attr_combs[attr_names[1]]:
-                for attr_value_2 in self._nh_attr_combs[attr_names[2]]:
-                    for attr_value_3 in self._nh_attr_combs[attr_names[3]]:
-                        ftr_comb = {}
-                        ftr_comb[attr_names[0]] = attr_value_0
-                        ftr_comb[attr_names[1]] = attr_value_1
-                        ftr_comb[attr_names[2]] = attr_value_2
-                        ftr_comb[attr_names[3]] = attr_value_3
-
-                        set_id = random.random()
-                        if set_id < self._train_test_split[0]:
-                            common_adj_combs.append(ftr_comb)
-                        else:
-                            holdout_adj_combs.append(ftr_comb)
-        return common_adj_combs, holdout_adj_combs
+                ftr_comb = {}
+                ftr_comb[attr_names[0]] = attr_value_0
+                ftr_comb[attr_names[1]] = attr_value_1
+                all_adj_combs.append(ftr_comb)
+        return all_adj_combs
     
+    def split_datasets(self, all_adj_combinations: List, split: int, hard_attrs: Dict) -> Tuple:
+        train_combs = []
+        holdout_combs = []
+        hholdout_combs = []
+
+        for attr_comb in all_adj_combinations:
+            if all(attr_comb[k] == hard_attrs[k] for k in hard_attrs.keys()):
+                hholdout_combs.append(attr_comb)
+            else:
+                set_id = random.random()
+                if set_id < split:
+                    train_combs.append(attr_comb)
+                else:
+                    holdout_combs.append(attr_comb)
+        return train_combs, holdout_combs, hholdout_combs
+        
     def get_all_instructions(self):
         
         all_adjective_combs = deepcopy(self._common_adj_combs)
@@ -375,7 +377,7 @@ if __name__ == "__main__":
 
     env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
     
-    for episode in tqdm(range(hparams['n_episodes'])):
+    for episode in tqdm(range(10)):
         obs, _ = env.reset()
         done = False
 

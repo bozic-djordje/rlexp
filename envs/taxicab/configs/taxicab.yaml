@@ -10,34 +10,22 @@ grid:
 pomdp: false 
 easy_mode: false
 start_pos: null
+max_steps: 200
 slip_chance: 0
 seed: 1
-train_test_split: [0.8, 0.2]
+train_test_split: 0.7
 
 # Attributes that should be grounded.
 # Attributes that have a direct representation
-attribute_order: ["colour", "building", "size", "fill"]
+attribute_order: ["colour", "building"]
 colour: [green, blue, red, yellow]
 building: [hospital, school, library, office]
-size: [big, small]
-fill: [filled, outlined]
 
 location_formulation:
   
 location_formulation:
-  - colour size fill building
-  - colour fill size building
-  - size colour fill building
-  - size fill colour building
-  - fill colour size building
-  - fill size colour building
-  # - building which is colour size fill
-  # - building which is colour fill size
-  # - building which is size colour fill
-  # - building which is size fill colour
-  # - building which is fill colour size
-  # - building which is fill size colour
-
+  - colour building
+  - building which is colour
 
 passenger_formulation:
   - passenger
@@ -63,13 +51,8 @@ goal_formulation:
 
 default_feature: "0" 
 
-use_color_map: True
-use_building_map: True
-use_size_map: True
-use_fill_map: False
-
 # 8 combinations total with green hospital being fixed
 # green hospitals must not exist in the train or test sets
 hard_test_attributes:
-  colour: green
-  building: hospital
+  colour: null
+  building: null
