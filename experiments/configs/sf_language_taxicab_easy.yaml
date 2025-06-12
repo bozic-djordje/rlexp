@@ -28,9 +28,9 @@ experiment:
   psi_nn_dim: [768]
   step_size: [1e-5, 1e-2]
   batch_size: [64, 128]
-  buffer_size: 20000
+  buffer_size: 500000
   target_update_steps: [500, 1000]
-  episode_per_test: 100
+  episode_per_test: 3
 
   # Exploration rate parameters
   epsilon_start: 1
@@ -67,7 +67,8 @@ environment:
   fill: [filled, outlined]
 
   location_formulation:
-    - colour size fill building
+    - colour
+    # - colour size fill building
     # - colour fill size building
     # - size colour fill building
     # - size fill colour building
