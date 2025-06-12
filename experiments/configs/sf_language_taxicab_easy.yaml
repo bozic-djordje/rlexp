@@ -41,45 +41,31 @@ experiment:
 # Environment hyper-parameters are fixed
 environment:
   grid:
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-    - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
-    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
-    - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
+  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
+  - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
-  pomdp: true
+  pomdp: false 
   easy_mode: true
   max_steps: 200
-  disc_fact: 0.99 #gamma
   start_pos: null
   slip_chance: 0
   seed: 1
-  train_test_split: [0.8, 0.2]
+  train_test_split: 0.7
 
   # Attributes that should be grounded.
   # Attributes that have a direct representation
-  attribute_order: ["colour", "building", "size", "fill"]
+  attribute_order: ["colour", "building"]
   colour: [green, blue, red, yellow]
   building: [hospital, school, library, office]
-  size: [big, small]
-  fill: [filled, outlined]
-
+    
   location_formulation:
-    - colour
-    # - colour size fill building
-    # - colour fill size building
-    # - size colour fill building
-    # - size fill colour building
-    # - fill colour size building
-    # - fill size colour building
-    # - building which is colour size fill
-    # - building which is colour fill size
-    # - building which is size colour fill
-    # - building which is size fill colour
-    # - building which is fill colour size
-    # - building which is fill size colour
+    - colour building
+    #  - building which is colour
 
   passenger_formulation:
     - passenger
@@ -96,8 +82,6 @@ environment:
   goal_formulation:
     - phrase: drive_common to location_formulation.
       goal_first: true
-    # - phrase: drive_common to passenger_reference at location_formulation, then drive_common to location_formulation.
-    #   goal_first: false
     # - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
     #   goal_first: true
     # - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
@@ -110,5 +94,5 @@ environment:
   # 8 combinations total with green hospital being fixed
   # green hospitals must not exist in the train or test sets
   hard_test_attributes:
-    colour: green
-    building: hospital
+    colour: null
+    building: null

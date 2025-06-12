@@ -9,10 +9,10 @@ from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 DEFAULT_FEATURES = [
-    { "colour": "red",    "building": "hospital", "size": "big",   "fill": "filled"   },
-    { "colour": "blue",   "building": "school",   "size": "big",   "fill": "filled"   },
-    { "colour": "yellow", "building": "library",  "size": "big",   "fill": "filled"   },
-    { "colour": "green",  "building": "office",   "size": "small", "fill": "outlined" },
+    { "colour": "red",    "building": "hospital"},
+    { "colour": "blue",   "building": "school"  },
+    { "colour": "yellow", "building": "library" },
+    { "colour": "green",  "building": "office"  },
 ]
 
 class FeatureTaxicab(gym.Env):
@@ -53,7 +53,7 @@ class FeatureTaxicab(gym.Env):
             self.rng = np.random.default_rng()
 
         # [row, col, passenger_loc, has_passenger, patch_features x 4]
-        self.observation_space = gym.spaces.MultiDiscrete([10] * 11)
+        self.observation_space = gym.spaces.MultiDiscrete([10] * 9)
         
         # Random start option
         self._random_start = hparams['start_pos'] == None
@@ -112,14 +112,16 @@ class FeatureTaxicab(gym.Env):
                 feature_value = self._feature_map[feature_name].index(feature_text) + 1
                 feature_value_str += str(feature_value)
                 feature_value_lst.append(feature_value)
-                if feature_name != "size":
-                    feature_asset_name += f'{feature_text}_'
+                feature_asset_name += f'{feature_text}_'
+            # Hack for compatibility with legacy asset names where filled was one of the features
+            feature_asset_name += "filled"
+            
             # Feature values stored as a string
             attr_dict["feature_value_text"] = feature_value_str
             # Feature values stored as an array of integers
             attr_dict["feature_value_list"] = feature_value_lst
             attr_dict["colour_code"] = COLOUR_MAP[attr_dict["colour"]]
-            attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name[:-1]}.png')
+            attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name}.png')
         return location_features
 
     def _pick_random_start(self):
@@ -278,11 +280,7 @@ class FeatureTaxicab(gym.Env):
 
         if use_png:
             for loc, feature_dict in self._poi.items():
-                if feature_dict["size"] == "big":
-                    png_size = cell_size
-                else:
-                    png_size = small_size   
-                png_cache[loc] = load_and_resize_png(feature_dict["png_path"], png_size, keep_alpha=False)
+                png_cache[loc] = load_and_resize_png(feature_dict["png_path"], cell_size, keep_alpha=False)
                 png_dir = os.path.dirname(feature_dict["png_path"])
             agent_image = load_and_resize_png(os.path.join(png_dir, "taxi.png"), small_size, keep_alpha=True)
             passenger_image = load_and_resize_png(os.path.join(png_dir, "passenger.png"), small_size, keep_alpha=True)
@@ -298,12 +296,7 @@ class FeatureTaxicab(gym.Env):
             x0, x1 = c * cell_size, (c + 1) * cell_size
 
             if use_png:
-                if feature_dict["size"] == "big":
-                    image[y0:y1, x0:x1] = png_cache[loc]
-                else:
-                    x_offset = x0 + (cell_size - small_size) // 2
-                    y_offset = y0 + (cell_size - small_size) // 2
-                    image[y_offset:y_offset+small_size, x_offset:x_offset+small_size] = png_cache[loc]
+                image[y0:y1, x0:x1] = png_cache[loc]
             else:
                 # Place four letters in a 2×2 arrangement, shifted left/down.
                 # 'quarter' is 1/4 of the cell size; 
@@ -319,17 +312,17 @@ class FeatureTaxicab(gym.Env):
                 # Then we shift them slightly left (subtract from x) and down (add to y).
                 pos1 = (x0 + quarter - x_shift,      y0 + quarter + y_shift)        # top-left
                 pos2 = (x0 + 3 * quarter - x_shift,  y0 + quarter + y_shift)        # top-right
-                pos3 = (x0 + quarter - x_shift,      y0 + 3 * quarter + y_shift)    # bottom-left
-                pos4 = (x0 + 3 * quarter - x_shift,  y0 + 3 * quarter + y_shift)    # bottom-right
+                # pos3 = (x0 + quarter - x_shift,      y0 + 3 * quarter + y_shift)    # bottom-left
+                # pos4 = (x0 + 3 * quarter - x_shift,  y0 + 3 * quarter + y_shift)    # bottom-right
 
                 cv2.putText(image, letters[0], pos1, font, font_scale,
                             text_color, thickness, lineType=cv2.LINE_AA)
                 cv2.putText(image, letters[1], pos2, font, font_scale,
                             text_color, thickness, lineType=cv2.LINE_AA)
-                cv2.putText(image, letters[2], pos3, font, font_scale,
-                            text_color, thickness, lineType=cv2.LINE_AA)
-                cv2.putText(image, letters[3], pos4, font, font_scale,
-                            text_color, thickness, lineType=cv2.LINE_AA)
+                # cv2.putText(image, letters[2], pos3, font, font_scale,
+                #             text_color, thickness, lineType=cv2.LINE_AA)
+                # cv2.putText(image, letters[3], pos4, font, font_scale,
+                #             text_color, thickness, lineType=cv2.LINE_AA)
 
         # Plot current position of taxicab and passenger
         if use_png:
