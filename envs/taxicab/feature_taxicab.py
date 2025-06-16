@@ -234,7 +234,7 @@ class FeatureTaxicab(gym.Env):
                 self._passenger_in = 0
                 is_terminal = True
                 reward = 20
-            else:
+            elif not self._easy_mode:
                 reward = -10
         
         if self._passenger_in:
