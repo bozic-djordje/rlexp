@@ -42,6 +42,7 @@ class LanguageTaxicab(gym.Env):
         self._instr = None
         self._origin_ind = None 
         self._dest_ind = None
+        self._options = None
         _ = self.reset()
 
     @property
@@ -142,11 +143,16 @@ class LanguageTaxicab(gym.Env):
         return task, instr, origin_index, dest_index
     
     def reset(self, seed=None, options=None):
-        self._task, self._instr, self._origin_ind, self._dest_ind = self._sample_task()
-        options = {}
-        options["location_features"] = self._task
-        options["origin_ind"] = self._origin_ind
-        options["dest_ind"] = self._dest_ind
+        # In easy mode only one configuration exists
+        if self._options is not None and self._easy_mode:
+            options = self._options
+        else:
+            self._task, self._instr, self._origin_ind, self._dest_ind = self._sample_task()
+            options = {}
+            options["location_features"] = self._task
+            options["origin_ind"] = self._origin_ind
+            options["dest_ind"] = self._dest_ind
+            self._options = options
         self._task_num += 1
         _, info = self._env.reset(seed, options)
         # Hack to include instruction into obs
