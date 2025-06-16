@@ -1,4 +1,5 @@
 from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass
 import torch
 from torch import nn
@@ -7,6 +8,7 @@ from tianshou.data.buffer.base import Batch
 from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from torch.distributions import Categorical
+from algos.common import argmax_random_tiebreak
 
 @dataclass
 class SFBertTrainingStats(TrainingStats):
@@ -38,6 +40,7 @@ class SFBert(BasePolicy):
         self.gamma = gamma
         self.target_update_freq = target_update_freq
         self._update_count = 0  # Counter for training iterations
+        self._r_counter = Counter()
         
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
@@ -100,7 +103,7 @@ class SFBert(BasePolicy):
         psis = self.psi_nn(phis)
         # Q(s,a) \in (batch_size, num_actions)
         qs = torch.bmm(psis, w.unsqueeze(2)).squeeze(2)
-        acts_selected = torch.argmax(qs, dim=1).squeeze(-1)
+        acts_selected = argmax_random_tiebreak(qs=qs)
         psis_selected = psis[torch.arange(batch_size), acts_selected, :]
 
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
@@ -109,7 +112,7 @@ class SFBert(BasePolicy):
             phis_next = self.phi_nn(batch.obs_next.features)
             psis_next = self.psi_nn_t(phis_next)
             qs_next = torch.bmm(psis_next, w.unsqueeze(2)).squeeze(2)
-            acts_greedy = torch.argmax(qs_next, dim=1).squeeze(-1)
+            acts_greedy = argmax_random_tiebreak(qs=qs_next)
             psis_next_greedy = psis_next[torch.arange(batch_size), acts_greedy, :]
             
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
@@ -133,6 +136,10 @@ class SFBert(BasePolicy):
             r_target = torch.tensor(batch.rew, dtype=torch.float32).to(self.device)
         else:
             r_target = batch.rew
+        
+        values, counts = torch.unique(r_target.view(-1), return_counts=True)
+        r_counter = Counter(dict(zip(values.cpu().tolist(), counts.cpu().tolist())))
+        self._r_counter += r_counter
 
         w = self.instr_to_embedding(instrs=batch.obs.instr)
         
@@ -140,13 +147,18 @@ class SFBert(BasePolicy):
             self.phi_nn(batch.obs.features).unsqueeze(1), 
             w.unsqueeze(2)
         ).squeeze()
-    
+
+        target_list = r_target.tolist()
+        weights = torch.tensor([1.0 / self._r_counter[val] for val in target_list]).to(self.device)
+        weights = weights / weights.sum()
+
         self.phi_optim.zero_grad()
-        loss = (torch.nn.functional.mse_loss(r_pred, r_target)).mean()
-        loss.backward()
+        squared_errors = (r_pred - r_target) ** 2
+        weighted_loss = (weights * squared_errors).sum()
+        weighted_loss.backward()
         self.phi_optim.step()
         
-        return loss.detach().item()
+        return weighted_loss.detach().item()
 
     def learn(self, batch, **kwargs):
         stats = SFBertTrainingStats()
