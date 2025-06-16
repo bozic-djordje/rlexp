@@ -168,3 +168,15 @@ def train_loop(env: Env, agent: Agent, hparams: Dict, random=False) -> None:
         # On-policy psi update
         if hparams['algo_type'] == 'on_policy':
             agent.update()
+
+
+def argmax_random_tiebreak(qs: torch.Tensor) -> torch.Tensor:
+    """
+    qs: Tensor of shape (batch_size, num_actions)
+    Returns: LongTensor of shape (batch_size,) with random argmax indices
+    """
+    max_vals = qs.max(dim=1, keepdim=True).values               # (B, 1)
+    is_max = qs == max_vals                                     # (B, A), bool mask
+    rand = torch.rand_like(qs)                                  # (B, A), uniform random
+    rand[~is_max] = -1.0                                         # mask out non-max entries
+    return rand.argmax(dim=1)                                   # pick random max index
