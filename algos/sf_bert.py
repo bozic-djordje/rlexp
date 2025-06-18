@@ -3,6 +3,7 @@ from collections import Counter
 from dataclasses import dataclass
 import torch
 from torch import nn
+from torch.nn.utils import clip_grad_norm_
 from typing import Dict
 from tianshou.data.buffer.base import Batch
 from tianshou.policy.base import TrainingStats
@@ -139,6 +140,7 @@ class SFBert(BasePolicy):
         self.psi_optim.zero_grad()
         loss = (torch.nn.functional.mse_loss(psis_selected, psis_target)).mean()
         loss.backward()
+        clip_grad_norm_(self.psi_nn.parameters(), max_norm=10)
         self.psi_optim.step()
         return torch.mean(td_error).item()
     
@@ -170,16 +172,17 @@ class SFBert(BasePolicy):
         squared_errors = (r_pred - r_target) ** 2
         weighted_loss = (weights * squared_errors).sum()
         weighted_loss.backward()
+        clip_grad_norm_(self.phi_nn.parameters(), max_norm=10)
         self.phi_optim.step()
         
         return weighted_loss.detach().item()
 
     def learn(self, batch, **kwargs):
-
         # Update the target network if needed
         if self._update_count % self.target_update_freq == 0:
-            self.sync_weight()
             self._update_phi = not self._update_phi
+            if self._update_phi:
+                self.sync_weight()
         
         # Cyclical optimisation as recommended in the paper
         # Algorithm 1 does not suggest this though
