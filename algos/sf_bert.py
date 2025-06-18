@@ -15,10 +15,11 @@ class SFBertTrainingStats(TrainingStats):
     psi_td_loss: float = 0.0
     phi_l2_loss: float = 0.0
     epsilon: float = 0.0
+    terminal_freq: float = 0.0
 
 
 class SFBert(BasePolicy):
-    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, gamma:float=0.99, seed:float=1., device:torch.device=torch.device("cpu")):
+    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, gamma:float=0.99, seed:float=1., terminal_rew:float=20, device:torch.device=torch.device("cpu")):
         super().__init__(action_space=action_space)
         self.device = device
 
@@ -46,8 +47,12 @@ class SFBert(BasePolicy):
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
 
-        self._prev_l2_loss = 0
-        self._prev_td_loss = 0
+        self._phi_l2_loss = 0
+        self._psi_td_loss = 0
+
+        # For logging and debugging purposes
+        self._terminal_rew = terminal_rew
+        self._terminal_freq = 0
 
         # To be set by trainer
         self.eps = None
@@ -147,6 +152,9 @@ class SFBert(BasePolicy):
         r_counter = Counter(dict(zip(values.cpu().tolist(), counts.cpu().tolist())))
         self._r_counter += r_counter
 
+        if self._terminal_rew in self._r_counter:
+            self._terminal_freq = self._r_counter[self._terminal_rew] / sum(self._r_counter.values())
+
         w = self.instr_to_embedding(instrs=batch.obs.instr)
         
         r_pred = torch.bmm(
@@ -167,8 +175,6 @@ class SFBert(BasePolicy):
         return weighted_loss.detach().item()
 
     def learn(self, batch, **kwargs):
-        stats = SFBertTrainingStats()
-        stats.epsilon = self.eps
 
         # Update the target network if needed
         if self._update_count % self.target_update_freq == 0:
@@ -178,20 +184,18 @@ class SFBert(BasePolicy):
         # Cyclical optimisation as recommended in the paper
         # Algorithm 1 does not suggest this though
         if self._update_phi:
-            l2_error = self.phi_update(batch=batch)
-            self._prev_l2_loss = l2_error
-            stats.phi_l2_loss = l2_error
-            # Hack for correct logging
-            stats.psi_td_loss = self._prev_td_loss
+            self._phi_l2_loss = self.phi_update(batch=batch)
         else:
-            td_error = self.psi_update(batch=batch)
-            self._prev_td_loss = td_error
-            stats.psi_td_loss = td_error
-            # Hack for correct logging
-            stats.phi_l2_loss = self._prev_l2_loss
+            self._psi_td_loss = self.psi_update(batch=batch)
 
         # Increment the iteration counter
         self._update_count += 1
+        
+        stats = SFBertTrainingStats()
+        stats.epsilon = self.eps
+        stats.phi_l2_loss = self._phi_l2_loss
+        stats.psi_td_loss = self._psi_td_loss
+        stats.terminal_freq = self._terminal_freq
 
         return stats
 
