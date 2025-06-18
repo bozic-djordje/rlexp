@@ -31,6 +31,7 @@ class SFBert(BasePolicy):
             p.requires_grad = False
         self.psi_nn_t.eval()
         self.sync_weight()
+        self._update_phi = True
 
         self.precomp_embed = precomp_embeddings
         for key in self.precomp_embed:
@@ -79,19 +80,23 @@ class SFBert(BasePolicy):
             q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
             
             dist = Categorical(logits=q_logits)
-            act = dist.sample() 
+            act = dist.sample()
         return Batch(act=act, state=state, dist=dist)
     
     def psi_update(self, batch: Batch) -> float:
         batch_size = len(batch)
-        
-        # Get the active instruction when the transition was played
-        w = self.instr_to_embedding(instrs=batch.obs.instr)
-
         if not isinstance(batch.terminated, torch.Tensor):
             terminated = torch.tensor(batch.terminated, dtype=torch.int).to(self.device)
         else:
             terminated = batch.terminated
+
+        if not isinstance(batch.act, torch.Tensor):
+            acts_selected = torch.tensor(batch.act, dtype=torch.int).to(self.device)
+        else:
+            acts_selected = batch.act
+
+        # Get the active instruction when the transition was played
+        w = self.instr_to_embedding(instrs=batch.obs.instr)
         
         with torch.no_grad():
             phis = self.phi_nn(batch.obs.features)
@@ -102,8 +107,6 @@ class SFBert(BasePolicy):
         
         psis = self.psi_nn(phis)
         # Q(s,a) \in (batch_size, num_actions)
-        qs = torch.bmm(psis, w.unsqueeze(2)).squeeze(2)
-        acts_selected = argmax_random_tiebreak(qs=qs)
         psis_selected = psis[torch.arange(batch_size), acts_selected, :]
 
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
@@ -167,13 +170,17 @@ class SFBert(BasePolicy):
         # Update the target network if needed
         if self._update_count % self.target_update_freq == 0:
             self.sync_weight()
-
-        td_error = self.psi_update(batch=batch)
-        stats.psi_td_loss = td_error
-
-        l2_error = self.phi_update(batch=batch)
-        stats.phi_l2_loss = l2_error
+            self._update_phi = not self._update_phi
         
+        # Cyclical optimisation as recommended in the paper
+        # Algorithm 1 does not suggest this though
+        if self._update_phi:
+            l2_error = self.phi_update(batch=batch)
+            stats.phi_l2_loss = l2_error
+        else:
+            td_error = self.psi_update(batch=batch)
+            stats.psi_td_loss = td_error
+
         # Increment the iteration counter
         self._update_count += 1
 
