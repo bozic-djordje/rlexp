@@ -46,6 +46,9 @@ class SFBert(BasePolicy):
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
 
+        self._prev_l2_loss = 0
+        self._prev_td_loss = 0
+
         # To be set by trainer
         self.eps = None
         self.max_action_num = self.action_space.n
@@ -176,10 +179,16 @@ class SFBert(BasePolicy):
         # Algorithm 1 does not suggest this though
         if self._update_phi:
             l2_error = self.phi_update(batch=batch)
+            self._prev_l2_loss = l2_error
             stats.phi_l2_loss = l2_error
+            # Hack for correct logging
+            stats.psi_td_loss = self._prev_td_loss
         else:
             td_error = self.psi_update(batch=batch)
+            self._prev_td_loss = td_error
             stats.psi_td_loss = td_error
+            # Hack for correct logging
+            stats.phi_l2_loss = self._prev_l2_loss
 
         # Increment the iteration counter
         self._update_count += 1
