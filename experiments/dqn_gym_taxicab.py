@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
 from algos.nets import FCActionValue
-from algos.common import EpsilonDecayHookFactory
+from algos.common import EpsilonDecayHook
 from utils import setup_artefact_paths, setup_experiment
 from yaml_utils import load_yaml, save_yaml
 
@@ -54,7 +54,7 @@ if __name__ == '__main__':
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
-    EpsilonDecayHookFactory.initialize(exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    EpsilonDecayHook.initialize(exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
 
     result = OffpolicyTrainer(
         policy=agent,
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=200,
         update_per_step=0.25, episode_per_test=100, batch_size=exp_hparams["batch_size"],
-        train_fn=EpsilonDecayHookFactory.train_hook,
+        train_fn=EpsilonDecayHook.train_hook,
         test_fn=lambda epoch, global_step: agent.set_eps(0.05),
         logger=logger
     ).run()

@@ -2,13 +2,13 @@ import os
 import torch
 import optuna, pickle
 
-from tianshou.data import Collector, ReplayBuffer
+from tianshou.data import Collector, ReplayBuffer, PrioritizedReplayBuffer
 from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
 from algos.sf_bert import SFBert
-from algos.common import EpsilonDecayHookFactory, SaveHookFactory
+from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, SaveHook
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
@@ -65,7 +65,14 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         bert_layer_ind = -1
     layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
     
-    rb = ReplayBuffer(size=exp_hparams['buffer_size'])
+    if exp_hparams['prioritised_replay'] is False:
+        rb = ReplayBuffer(size=exp_hparams['buffer_size'])
+    else:
+        rb = PrioritizedReplayBuffer(
+            size=exp_hparams['buffer_size'], 
+            alpha=exp_hparams["priority_alpha"], 
+            beta=exp_hparams["priority_beta_start"]
+        )
     
     phi_nn = FCTrunk(
         in_dim=train_env.observation_space["features"].shape[0],
@@ -82,11 +89,14 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     
     agent = SFBert(
         phi_nn=phi_nn, 
-        psi_nn=psi_nn, 
+        psi_nn=psi_nn,
+        rb=rb,
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,
+        l2_freq_scaling=exp_hparams["l2_freq_scaling"],
         lr=exp_hparams["step_size"],
-        target_update_freq=exp_hparams["target_update_steps"], 
+        target_update_freq=exp_hparams["target_update_steps"],
+        cycle_update_freq=exp_hparams["cycle_update_steps"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device
@@ -97,8 +107,24 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
-    epoch_hook_factory = EpsilonDecayHookFactory(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
-    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+    
+    hooks = CompositeHook(agent=agent, logger=logger, hooks=[])
+    epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    hooks.add_hook(epoch_hook)
+
+    if exp_hparams["prioritised_replay"]:
+        beta_anneal_hook = BetaAnnealHook(
+            agent=agent, 
+            buffer=rb, 
+            beta_start=exp_hparams["priority_beta_start"],
+            beta_end=exp_hparams["priority_beta_end"], 
+            frac=exp_hparams["priority_beta_frac"],
+            max_steps=n_epochs*n_steps,
+            logger=logger
+        )
+        hooks.add_hook(beta_anneal_hook)
+
+    save_hook = SaveHook(save_path=f'{store_path}/best_model.pth')
     
     result = OffpolicyTrainer(
         policy=agent,
@@ -106,9 +132,9 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=exp_hparams["step_per_collect"],
         update_per_step=exp_hparams["update_per_step"], episode_per_test=exp_hparams["episode_per_test"], batch_size=exp_hparams["batch_size"],
-        train_fn=epoch_hook_factory.hook,
+        train_fn=hooks.hook,
         test_fn=lambda epoch, global_step: agent.set_eps(exp_hparams["test_epsilon"]),
-        save_best_fn=save_hook_factory.hook,
+        save_best_fn=save_hook.hook,
         logger=logger
     ).run()
     torch.save(agent.state_dict(), f'{store_path}/last_model.pth')
