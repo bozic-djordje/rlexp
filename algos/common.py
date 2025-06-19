@@ -1,10 +1,11 @@
 from abc import abstractmethod, ABC
 from tianshou.policy import BasePolicy
 from tianshou.utils import TensorboardLogger
+from tianshou.data import PrioritizedReplayBuffer
 from collections import defaultdict
 from gymnasium import Env
 from tqdm import tqdm
-from typing import Any, Dict, Callable
+from typing import Any, Dict, Callable, List
 import torch
 import numpy as np
 from typing import Union, Tuple
@@ -100,7 +101,7 @@ class Scheduler:
         return self.current
 
 
-class EpochHookFactory(ABC):
+class EpochHook(ABC):
     def __init__(self, agent: BasePolicy, logger: TensorboardLogger):
         self.agent = agent
         self.logger = logger
@@ -111,7 +112,20 @@ class EpochHookFactory(ABC):
         pass
 
 
-class EpsilonDecayHookFactory(EpochHookFactory):
+class CompositeHook(EpochHook):
+    def __init__(self, hooks:List, agent: BasePolicy, logger: TensorboardLogger):
+        super().__init__(agent, logger)
+        self.hooks: List[EpochHook] = hooks
+
+    def add_hook(self, hook:EpochHook):
+        self.hooks.append(hook)
+    
+    def hook(self, epoch, global_step):
+        for h in self.hooks:
+            h.hook(epoch=epoch, global_step=global_step)
+
+
+class EpsilonDecayHook(EpochHook):
     def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger):
         super().__init__(agent, logger)
 
@@ -132,7 +146,24 @@ class EpsilonDecayHookFactory(EpochHookFactory):
         self.agent.set_eps(epsilon)
         self.logger.write("train/env_step", global_step, {"epsilon": self.agent.eps})
 
-class SaveHookFactory:
+
+class BetaAnnealHook(EpochHook):
+    def __init__(self, agent: BasePolicy, buffer:PrioritizedReplayBuffer, beta_start:float, beta_end:float, frac:float, max_steps:int, logger: TensorboardLogger):
+        super().__init__(agent, logger)
+        self.rb = buffer
+        self.b0 = beta_start
+        self.b1 = beta_end
+        self.anneal_steps = int(frac * max_steps)
+
+    def hook(self, epoch: int, global_step: int):
+        if global_step >= self.anneal_steps:
+            beta = self.b1
+        else:
+            beta = self.b0 + (self.b1 - self.b0) * (global_step / self.anneal_steps)
+        self.rb.set_beta(beta)
+
+
+class SaveHook:
     def __init__(self, save_path:str):
         self.save_path = save_path
 

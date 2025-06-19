@@ -8,12 +8,12 @@ experiment:
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
   # [0, 7, 8, 11]
-  bert_layer_index: [0, 7]
-  n_trials: 20
-  n_epochs: 1500
+  bert_layer_index: 0
+  n_trials: 40
+  n_epochs: 300
   # Number of update steps in epoch
   epoch_steps: 1000
-  warmup_steps: 500
+  warmup_steps: 2000
 
   # How many steps in the environment will be called before the agent enters the update phase.
   # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=02.5
@@ -21,21 +21,32 @@ experiment:
   step_per_collect: 200
   # How many updates will happen to the network per step in the environment
   # For 0.25 update happens every 4 steps
-  update_per_step: [0.05, 0.5]
+  update_per_step: [0.01, 0.5]
   
   # Algorithm hyper-parameters
-  phi_nn_dim: [[256, 768]]
+  phi_nn_dim: [[768]]
   psi_nn_dim: [768]
-  step_size: [1e-5, 1e-2]
-  batch_size: 256
-  buffer_size: 500000
-  target_update_steps: [500, 1000]
-  episode_per_test: 3
+  step_size: [1e-5, 1e-3]
+  batch_size: [64, 256]
+  l2_freq_scaling: true
+  target_update_steps: [200, 500, 1000]
+  cycle_update_steps: [20, 200, 400]
+  episode_per_test: 1
+
+  buffer_size: 50000
+  prioritised_replay: true
+  # How strongly priorities affect sampling
+  priority_alpha: 0.7
+  # How strongly to correct for priority-affected sampling
+  # Importance weights schedule
+  priority_beta_start: 0.4
+  priority_beta_end: 1.0
+  priority_beta_frac: 0.8
 
   # Exploration rate parameters
   epsilon_start: 1
   epsilon_end: 0.05
-  epsilon_fraction: [0.6, 0.8]
+  epsilon_fraction: 0.6
   test_epsilon: 0.05
 
 # Environment hyper-parameters are fixed

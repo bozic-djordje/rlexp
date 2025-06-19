@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
 from algos.nets import ConcatActionValue, precompute_bert_embeddings, extract_bert_layer_embeddings
-from algos.common import EpsilonDecayHookFactory, SaveHookFactory
+from algos.common import EpsilonDecayHook, SaveHook
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
@@ -90,8 +90,8 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
-    epoch_hook_factory = EpsilonDecayHookFactory(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
-    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+    epoch_hook_factory = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    save_hook_factory = SaveHook(save_path=f'{store_path}/best_model.pth')
     
     result = OffpolicyTrainer(
         policy=agent,

@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
 from algos.nets import FCActionValue
-from algos.common import EpsilonDecayHookFactory, SaveHookFactory
+from algos.common import EpsilonDecayHook, SaveHook
 from envs.taxicab.feature_taxicab import FeatureTaxicab
 from utils import setup_experiment, setup_artefact_paths
 from yaml_utils import load_yaml, save_yaml
@@ -93,8 +93,8 @@ if __name__ == '__main__':
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
-    epoch_hook_factory = EpsilonDecayHookFactory(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
-    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+    epoch_hook_factory = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    save_hook_factory = SaveHook(save_path=f'{store_path}/best_model.pth')
     
     result = OffpolicyTrainer(
         policy=agent,

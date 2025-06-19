@@ -4,12 +4,13 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from typing import Dict
+from typing import Any, Dict
 from tianshou.data.buffer.base import Batch
+from tianshou.data import ReplayBuffer, PrioritizedReplayBuffer
 from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from torch.distributions import Categorical
-from algos.common import argmax_random_tiebreak
+from algos.common import BetaAnnealHook, CompositeHook, argmax_random_tiebreak
 
 @dataclass
 class SFBertTrainingStats(TrainingStats):
@@ -20,7 +21,7 @@ class SFBertTrainingStats(TrainingStats):
 
 
 class SFBert(BasePolicy):
-    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, cycle_update_freq:int=500, gamma:float=0.99, seed:float=1., terminal_rew:float=20, global_weighing:bool=True, device:torch.device=torch.device("cpu")):
+    def __init__(self, phi_nn:torch.nn.Module, psi_nn:torch.nn.Module, lr:float, target_update_freq:int, cycle_update_freq:int, l2_freq_scaling:bool, action_space, precomp_embeddings:Dict, rb:ReplayBuffer, gamma:float=0.99, seed:float=1., terminal_rew:float=20, device:torch.device=torch.device("cpu")):
         super().__init__(action_space=action_space)
         self.device = device
 
@@ -39,13 +40,15 @@ class SFBert(BasePolicy):
         for key in self.precomp_embed:
             self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
 
+        self.rb = rb
+
         self.lr = lr
         self.gamma = gamma
         self.target_update_freq = target_update_freq
         self.cycle_update_freq = cycle_update_freq
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
-        self.global_weighing = global_weighing
+        self.l2_freq_scaling = l2_freq_scaling
         
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
@@ -132,19 +135,15 @@ class SFBert(BasePolicy):
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
             psis_target = phis + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
 
-        # We calculate the absolute difference between current and target values q values,
-        # which is useful info for debugging.
-        with torch.no_grad():
-            td_error = torch.abs(psis_target - psis_selected)
-
         # We update the "live" network, self.current. First we zero out the optimizer gradients
         # and then we apply the update step using qs_selected and qs_target.
         self.psi_optim.zero_grad()
-        loss = (torch.nn.functional.mse_loss(psis_selected, psis_target)).mean()
+        td_error = (psis_selected - psis_target).pow(2).sum(dim=1)
+        loss = (torch.tensor(batch.weight).to(self.device) * td_error).mean() if hasattr(batch, "weight") else td_error.mean()
         loss.backward()
         clip_grad_norm_(self.psi_nn.parameters(), max_norm=10)
         self.psi_optim.step()
-        return torch.mean(td_error).item()
+        return td_error.detach().cpu().numpy()
     
     def phi_update(self, batch:Batch) -> float:
         if not isinstance(batch.rew, torch.Tensor):
@@ -155,15 +154,13 @@ class SFBert(BasePolicy):
         values, counts = torch.unique(r_target.view(-1), return_counts=True)
         target_list = r_target.tolist()
         
-        if self.global_weighing:
+        if self.l2_freq_scaling:
             r_counter = Counter(dict(zip(values.cpu().tolist(), counts.cpu().tolist())))
             self.r_counter += r_counter
             weights = torch.tensor([1.0 / self.r_counter[val] for val in target_list]).to(self.device)
             weights = weights / weights.sum()
         else:
-            inv_counts = 1.0 / counts.cpu().float()
-            w_map = dict(zip(values.cpu().tolist(), inv_counts.tolist()))
-            weights = torch.tensor([w_map[val] for val in target_list]).to(self.device)
+            weights = torch.tensor([1.0 / len(target_list) for _ in target_list]).to(self.device)
 
         if self.terminal_rew in self.r_counter:
             self.terminal_freq = self.r_counter[self.terminal_rew] / sum(self.r_counter.values())
@@ -185,6 +182,9 @@ class SFBert(BasePolicy):
         return weighted_loss.detach().item()
 
     def learn(self, batch, **kwargs):
+        # Increment the iteration counter
+        self.update_count += 1
+        
         # Update the target network if needed
         if self.update_count % self.target_update_freq == 0:
             self.sync_weight()
@@ -197,10 +197,10 @@ class SFBert(BasePolicy):
         if self.update_phi:
             self.phi_l2_loss = self.phi_update(batch=batch)
         else:
-            self.psi_td_loss = self.psi_update(batch=batch)
-
-        # Increment the iteration counter
-        self.update_count += 1
+            td_error = self.psi_update(batch=batch)
+            self.psi_td_loss = td_error.mean()
+            if hasattr(batch, "weight"):
+                self.rb.update_weight(index=batch.indices, new_weight=td_error)
         
         stats = SFBertTrainingStats()
         stats.epsilon = self.eps
@@ -211,6 +211,7 @@ class SFBert(BasePolicy):
         return stats
 
     def process_fn(self, batch, buffer, indices):
+        batch.indices = indices
         return batch
 
     def exploration_noise(self, act, batch):
@@ -234,7 +235,7 @@ if __name__ == '__main__':
     from tianshou.utils import TensorboardLogger
     from tianshou.data import Collector, ReplayBuffer
     from tianshou.trainer import OffpolicyTrainer
-    from algos.common import EpsilonDecayHookFactory, SaveHookFactory
+    from algos.common import EpsilonDecayHook, SaveHook
     from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
     from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
     
@@ -278,7 +279,14 @@ if __name__ == '__main__':
     
     in_dim = train_env.observation_space["features"].shape[0] + layer_embeddings[next(iter(layer_embeddings))].shape[0]
     
-    rb = ReplayBuffer(size=exp_hparams['buffer_size'])
+    if exp_hparams['prioritised_replay'] is False:
+        rb = ReplayBuffer(size=exp_hparams['buffer_size'])
+    else:
+        rb = PrioritizedReplayBuffer(
+            size=exp_hparams['buffer_size'], 
+            alpha=exp_hparams["priority_alpha"], 
+            beta=exp_hparams["priority_beta_start"]
+        )
     
     phi_nn = FCTrunk(
         in_dim=train_env.observation_space["features"].shape[0],
@@ -295,11 +303,14 @@ if __name__ == '__main__':
     
     agent = SFBert(
         phi_nn=phi_nn, 
-        psi_nn=psi_nn, 
+        psi_nn=psi_nn,
+        rb=rb,
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,
+        l2_freq_scaling=exp_hparams["l2_freq_scaling"],
         lr=exp_hparams["step_size"],
-        target_update_freq=exp_hparams["target_update_steps"], 
+        target_update_freq=exp_hparams["target_update_steps"],
+        cycle_update_freq=exp_hparams["cycle_update_steps"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device
@@ -310,8 +321,23 @@ if __name__ == '__main__':
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
-    epoch_hook_factory = EpsilonDecayHookFactory(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
-    save_hook_factory = SaveHookFactory(save_path=f'{store_path}/best_model.pth')
+
+    hooks = CompositeHook(agent=agent, logger=logger, hooks=[])
+    epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    hooks.add_hook(epoch_hook)
+
+    if exp_hparams["prioritised_replay"]:
+        beta_anneal_hook = BetaAnnealHook(
+            agent=agent, 
+            buffer=rb, 
+            beta_start=exp_hparams["priority_beta_start"],
+            beta_end=exp_hparams["priority_beta_end"], 
+            frac=exp_hparams["priority_beta_frac"],
+            max_steps=n_epochs*n_steps,
+            logger=logger
+        )
+        hooks.add_hook(beta_anneal_hook)
+    save_hook_factory = SaveHook(save_path=f'{store_path}/best_model.pth')
     
     result = OffpolicyTrainer(
         policy=agent,
@@ -319,7 +345,7 @@ if __name__ == '__main__':
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=exp_hparams["step_per_collect"],
         update_per_step=exp_hparams["update_per_step"], episode_per_test=exp_hparams["episode_per_test"], batch_size=exp_hparams["batch_size"],
-        train_fn=epoch_hook_factory.hook,
+        train_fn=hooks.hook,
         test_fn=lambda epoch, global_step: agent.set_eps(exp_hparams["test_epsilon"]),
         save_best_fn=save_hook_factory.hook,
         logger=logger

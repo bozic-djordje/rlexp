@@ -8,7 +8,7 @@ experiment:
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
   # [0, 7, 8, 11]
-  bert_layer_index: [0, 7]
+  bert_layer_index: 0
   n_trials: 20
   
   n_epochs: 1500
@@ -22,20 +22,21 @@ experiment:
   step_per_collect: 200
   # How many updates will happen to the network per step in the environment
   # For 0.25 update happens every 4 steps
-  update_per_step: [0.05, 0.5]
+  update_per_step: [0.15, 0.5]
   
   # Algorithm hyper-parameters
   hidden_dim: [[1024, 256]]
-  step_size: [1e-5, 1e-2]
+  step_size: [1e-5, 1e-3]
   batch_size: 256
   buffer_size: 500000
-  target_update_steps: 1000
-  episode_per_test: 3
+  prioritised_replay: True
+  target_update_steps: 500
+  episode_per_test: 1
 
   # Exploration rate parameters
   epsilon_start: 1
   epsilon_end: 0.05
-  epsilon_fraction: 0.6
+  epsilon_fraction: 0.8
   test_epsilon: 0.05
 
 # Environment hyper-parameters are fixed
