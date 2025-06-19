@@ -20,7 +20,7 @@ class SFBertTrainingStats(TrainingStats):
 
 
 class SFBert(BasePolicy):
-    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, gamma:float=0.99, seed:float=1., terminal_rew:float=20, device:torch.device=torch.device("cpu")):
+    def __init__(self, phi_nn: torch.nn.Module, psi_nn: torch.nn.Module, lr:float, target_update_freq:int, action_space, precomp_embeddings:Dict, cycle_update_freq:int=500, gamma:float=0.99, seed:float=1., terminal_rew:float=20, global_weighing:bool=True, device:torch.device=torch.device("cpu")):
         super().__init__(action_space=action_space)
         self.device = device
 
@@ -33,7 +33,7 @@ class SFBert(BasePolicy):
             p.requires_grad = False
         self.psi_nn_t.eval()
         self.sync_weight()
-        self._update_phi = True
+        self.update_phi = True
 
         self.precomp_embed = precomp_embeddings
         for key in self.precomp_embed:
@@ -42,18 +42,20 @@ class SFBert(BasePolicy):
         self.lr = lr
         self.gamma = gamma
         self.target_update_freq = target_update_freq
-        self._update_count = 0  # Counter for training iterations
-        self._r_counter = Counter()
+        self.cycle_update_freq = cycle_update_freq
+        self.update_count = 0  # Counter for training iterations
+        self.r_counter = Counter()
+        self.global_weighing = global_weighing
         
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
         self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
 
-        self._phi_l2_loss = 0
-        self._psi_td_loss = 0
+        self.phi_l2_loss = 0
+        self.psi_td_loss = 0
 
         # For logging and debugging purposes
-        self._terminal_rew = terminal_rew
-        self._terminal_freq = 0
+        self.terminal_rew = terminal_rew
+        self.terminal_freq = 0
 
         # To be set by trainer
         self.eps = None
@@ -151,11 +153,20 @@ class SFBert(BasePolicy):
             r_target = batch.rew
         
         values, counts = torch.unique(r_target.view(-1), return_counts=True)
-        r_counter = Counter(dict(zip(values.cpu().tolist(), counts.cpu().tolist())))
-        self._r_counter += r_counter
+        target_list = r_target.tolist()
+        
+        if self.global_weighing:
+            r_counter = Counter(dict(zip(values.cpu().tolist(), counts.cpu().tolist())))
+            self.r_counter += r_counter
+            weights = torch.tensor([1.0 / self.r_counter[val] for val in target_list]).to(self.device)
+            weights = weights / weights.sum()
+        else:
+            inv_counts = 1.0 / counts.cpu().float()
+            w_map = dict(zip(values.cpu().tolist(), inv_counts.tolist()))
+            weights = torch.tensor([w_map[val] for val in target_list]).to(self.device)
 
-        if self._terminal_rew in self._r_counter:
-            self._terminal_freq = self._r_counter[self._terminal_rew] / sum(self._r_counter.values())
+        if self.terminal_rew in self.r_counter:
+            self.terminal_freq = self.r_counter[self.terminal_rew] / sum(self.r_counter.values())
 
         w = self.instr_to_embedding(instrs=batch.obs.instr)
         
@@ -163,10 +174,6 @@ class SFBert(BasePolicy):
             self.phi_nn(batch.obs.features).unsqueeze(1), 
             w.unsqueeze(2)
         ).squeeze()
-
-        target_list = r_target.tolist()
-        weights = torch.tensor([1.0 / self._r_counter[val] for val in target_list]).to(self.device)
-        weights = weights / weights.sum()
 
         self.phi_optim.zero_grad()
         squared_errors = (r_pred - r_target) ** 2
@@ -179,26 +186,27 @@ class SFBert(BasePolicy):
 
     def learn(self, batch, **kwargs):
         # Update the target network if needed
-        if self._update_count % self.target_update_freq == 0:
-            self._update_phi = not self._update_phi
-            if self._update_phi:
-                self.sync_weight()
+        if self.update_count % self.target_update_freq == 0:
+            self.sync_weight()
+        
+        if self.update_count % self.cycle_update_freq == 0:
+            self.update_phi = not self.update_phi
         
         # Cyclical optimisation as recommended in the paper
         # Algorithm 1 does not suggest this though
-        if self._update_phi:
-            self._phi_l2_loss = self.phi_update(batch=batch)
+        if self.update_phi:
+            self.phi_l2_loss = self.phi_update(batch=batch)
         else:
-            self._psi_td_loss = self.psi_update(batch=batch)
+            self.psi_td_loss = self.psi_update(batch=batch)
 
         # Increment the iteration counter
-        self._update_count += 1
+        self.update_count += 1
         
         stats = SFBertTrainingStats()
         stats.epsilon = self.eps
-        stats.phi_l2_loss = self._phi_l2_loss
-        stats.psi_td_loss = self._psi_td_loss
-        stats.terminal_freq = self._terminal_freq
+        stats.phi_l2_loss = self.phi_l2_loss
+        stats.psi_td_loss = self.psi_td_loss
+        stats.terminal_freq = self.terminal_freq
 
         return stats
 
