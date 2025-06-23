@@ -1,3 +1,4 @@
+from copy import deepcopy
 import os
 import torch
 import optuna, pickle
@@ -86,10 +87,26 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         h=[exp_hparams["psi_nn_dim"]],
         device=device
     )
+
+    if exp_hparams["use_reconstruction_loss"]:
+        # Reverse layers of the phi_nn (which acts as an encoder)
+        hidden_dim = deepcopy(exp_hparams["phi_nn_dim"])
+        hidden_dim.reverse()
+        in_dim = hidden_dim.pop(0)
+        hidden_dim.append(train_env.observation_space["features"].shape[0])
+        
+        dec_nn = FCTrunk(
+            in_dim=in_dim,
+            h=hidden_dim,
+            device=device
+        )
+    else:
+        dec_nn = None
     
     agent = SFBert(
         phi_nn=phi_nn, 
         psi_nn=psi_nn,
+        dec_nn=dec_nn,
         rb=rb,
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,

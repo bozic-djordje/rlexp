@@ -10,7 +10,7 @@ experiment:
   # [0, 7, 8, 11]
   bert_layer_index: 0
   n_trials: 40
-  n_epochs: 300
+  n_epochs: 450
   # Number of update steps in epoch
   epoch_steps: 1000
   warmup_steps: 2000
@@ -26,10 +26,10 @@ experiment:
   # Algorithm hyper-parameters
   phi_nn_dim: [[768]]
   psi_nn_dim: [768]
-  use_reconstruction_loss: false
+  use_reconstruction_loss: true
   step_size: [1e-5, 1e-3]
   batch_size: [64, 256]
-  l2_freq_scaling: true
+  l2_freq_scaling: false
   target_update_steps: [200, 500, 1000]
   cycle_update_steps: [20, 200, 400]
   episode_per_test: 1

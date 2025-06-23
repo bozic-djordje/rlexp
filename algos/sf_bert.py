@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from tianshou.data.buffer.base import Batch
 from tianshou.data import ReplayBuffer, PrioritizedReplayBuffer
 from tianshou.policy.base import TrainingStats
@@ -16,45 +16,72 @@ from algos.common import BetaAnnealHook, CompositeHook, argmax_random_tiebreak
 class SFBertTrainingStats(TrainingStats):
     psi_td_loss: float = 0.0
     phi_l2_loss: float = 0.0
+    rec_loss: float = 0.0
     epsilon: float = 0.0
     terminal_freq: float = 0.0
 
 
 class SFBert(BasePolicy):
-    def __init__(self, phi_nn:torch.nn.Module, psi_nn:torch.nn.Module, lr:float, target_update_freq:int, cycle_update_freq:int, l2_freq_scaling:bool, action_space, precomp_embeddings:Dict, rb:ReplayBuffer, gamma:float=0.99, seed:float=1., terminal_rew:float=20, device:torch.device=torch.device("cpu")):
+    def __init__(
+            self, 
+            phi_nn:torch.nn.Module, 
+            psi_nn:torch.nn.Module, 
+            precomp_embeddings:Dict,
+            rb:ReplayBuffer,
+            action_space, 
+            lr:float, 
+            target_update_freq:int, 
+            cycle_update_freq:int, 
+            l2_freq_scaling:bool, 
+            gamma:float=0.99, 
+            seed:float=1., 
+            terminal_rew:float=20,
+            dec_nn:Optional[torch.nn.Module]=None, 
+            device:torch.device=torch.device("cpu")
+        ):
         super().__init__(action_space=action_space)
         self.device = device
+
+        self.lr = lr
+        self.gamma = gamma
+        self.rb = rb
 
         # Psi(s,a) and Phi(s) share the same base. To obtain Psi(s,*) call phi_s = Phi(s) first
         # and then call Psi(phi_s). This gives Psi(s,a) for all a.
         self.phi_nn: nn.Module = phi_nn
         self.psi_nn: nn.Module = psi_nn
+        self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
+        self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
+
         self.psi_nn_t: nn.Module = deepcopy(psi_nn)
         for p in self.psi_nn_t.parameters():
             p.requires_grad = False
         self.psi_nn_t.eval()
         self.sync_weight()
+        
         self.update_phi = True
+        
+        self.dec_nn = dec_nn
+        if self.dec_nn is not None:
+            self.use_reconstruction_loss = True
+            self.dec_optim = torch.optim.Adam(self.dec_nn.parameters(), lr=self.lr)
+        else:
+            self.use_reconstruction_loss = True
+            self.dec_optim = None
 
         self.precomp_embed = precomp_embeddings
         for key in self.precomp_embed:
             self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
 
-        self.rb = rb
-
-        self.lr = lr
-        self.gamma = gamma
         self.target_update_freq = target_update_freq
         self.cycle_update_freq = cycle_update_freq
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
         self.l2_freq_scaling = l2_freq_scaling
         
-        self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
-        self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
-
         self.phi_l2_loss = 0
         self.psi_td_loss = 0
+        self.rec_loss = 0
 
         # For logging and debugging purposes
         self.terminal_rew = terminal_rew
@@ -150,6 +177,11 @@ class SFBert(BasePolicy):
             r_target = torch.tensor(batch.rew, dtype=torch.float32).to(self.device)
         else:
             r_target = batch.rew
+
+        if not isinstance(batch.rew, torch.Tensor):
+            obs_target = torch.tensor(batch.obs.features, dtype=torch.float32).to(self.device)
+        else:
+            obs_target = batch.obs.features
         
         values, counts = torch.unique(r_target.view(-1), return_counts=True)
         target_list = r_target.tolist()
@@ -166,20 +198,38 @@ class SFBert(BasePolicy):
             self.terminal_freq = self.r_counter[self.terminal_rew] / sum(self.r_counter.values())
 
         w = self.instr_to_embedding(instrs=batch.obs.instr)
-        
-        r_pred = torch.bmm(
-            self.phi_nn(batch.obs.features).unsqueeze(1), 
-            w.unsqueeze(2)
-        ).squeeze()
 
         self.phi_optim.zero_grad()
-        squared_errors = (r_pred - r_target) ** 2
-        weighted_loss = (weights * squared_errors).sum()
-        weighted_loss.backward()
-        clip_grad_norm_(self.phi_nn.parameters(), max_norm=10)
+        if self.use_reconstruction_loss:
+            self.dec_optim.zero_grad()
+
+        phis = self.phi_nn(batch.obs.features)
+        r_pred = torch.bmm(phis.unsqueeze(1), w.unsqueeze(2)).squeeze()
+
+        reward_errors = (r_pred - r_target).pow(2)
+        reward_loss = (weights * reward_errors).sum()
+
+        if self.use_reconstruction_loss:
+            s_hats = self.dec_nn(phis)
+            rec_loss = (s_hats - obs_target).pow(2).mean()
+            total_loss = reward_loss + rec_loss
+        else:
+            rec_loss = torch.tensor(0., device=self.device)
+            total_loss = reward_loss
+
+        total_loss.backward()
+
+        # clip
+        clip_grad_norm_(self.phi_nn.parameters(), 10)
+        if self.use_reconstruction_loss:
+            clip_grad_norm_(self.dec_nn.parameters(), 10)
+
+        # step
         self.phi_optim.step()
+        if self.use_reconstruction_loss:
+            self.dec_optim.step()
         
-        return weighted_loss.detach().item()
+        return reward_loss.detach().item(), rec_loss.detach().item()
 
     def learn(self, batch, **kwargs):
         # Increment the iteration counter
@@ -195,7 +245,7 @@ class SFBert(BasePolicy):
         # Cyclical optimisation as recommended in the paper
         # Algorithm 1 does not suggest this though
         if self.update_phi:
-            self.phi_l2_loss = self.phi_update(batch=batch)
+            self.phi_l2_loss, self.rec_loss = self.phi_update(batch=batch)
         else:
             td_error = self.psi_update(batch=batch)
             self.psi_td_loss = td_error.mean()
@@ -207,6 +257,7 @@ class SFBert(BasePolicy):
         stats.phi_l2_loss = self.phi_l2_loss
         stats.psi_td_loss = self.psi_td_loss
         stats.terminal_freq = self.terminal_freq
+        stats.rec_loss = self.rec_loss
 
         return stats
 
@@ -300,10 +351,26 @@ if __name__ == '__main__':
         h=exp_hparams["psi_nn_dim"],
         device=device
     )
+
+    if exp_hparams["use_reconstruction_loss"]:
+        # Reverse layers of the phi_nn (which acts as an encoder)
+        hidden_dim = deepcopy(exp_hparams["phi_nn_dim"])
+        hidden_dim.reverse()
+        in_dim = hidden_dim.pop(0)
+        hidden_dim.append(train_env.observation_space["features"].shape[0])
+        
+        dec_nn = FCTrunk(
+            in_dim=in_dim,
+            h=hidden_dim,
+            device=device
+        )
+    else:
+        dec_nn = None
     
     agent = SFBert(
         phi_nn=phi_nn, 
         psi_nn=psi_nn,
+        dec_nn=dec_nn,
         rb=rb,
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,

@@ -26,6 +26,7 @@ experiment:
   # phi_nn[-1] must be the size of embeddings
   phi_nn_dim: [256, 768]
   psi_nn_dim: [768]
+  use_reconstruction_loss: true
   step_size: 1e-3
   batch_size: 64
   l2_freq_scaling: false

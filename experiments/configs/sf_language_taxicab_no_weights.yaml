@@ -26,6 +26,7 @@ experiment:
   # Algorithm hyper-parameters
   phi_nn_dim: [[768]]
   psi_nn_dim: [768]
+  use_reconstruction_loss: false
   step_size: [1e-5, 1e-3]
   batch_size: [64, 256]
   l2_freq_scaling: false
