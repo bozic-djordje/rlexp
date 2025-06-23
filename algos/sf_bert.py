@@ -66,7 +66,7 @@ class SFBert(BasePolicy):
             self.use_reconstruction_loss = True
             self.dec_optim = torch.optim.Adam(self.dec_nn.parameters(), lr=self.lr)
         else:
-            self.use_reconstruction_loss = True
+            self.use_reconstruction_loss = False
             self.dec_optim = None
 
         self.precomp_embed = precomp_embeddings
@@ -122,6 +122,7 @@ class SFBert(BasePolicy):
             
             dist = Categorical(logits=q_logits)
             act = dist.sample()
+            # act = argmax_random_tiebreak(q_logits)
         return Batch(act=act, state=state, dist=dist)
     
     def psi_update(self, batch: Batch) -> float:
