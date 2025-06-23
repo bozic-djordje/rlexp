@@ -161,7 +161,8 @@ class SFBert(BasePolicy):
             psis_next_greedy = psis_next[torch.arange(batch_size), acts_greedy, :]
             
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
-            psis_target = phis + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
+            # TODO: You lose recursion this way!
+            psis_target = phis_next + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
 
         # We update the "live" network, self.current. First we zero out the optimizer gradients
         # and then we apply the update step using qs_selected and qs_target.
@@ -180,9 +181,9 @@ class SFBert(BasePolicy):
             r_target = batch.rew
 
         if not isinstance(batch.rew, torch.Tensor):
-            obs_target = torch.tensor(batch.obs.features, dtype=torch.float32).to(self.device)
+            obs_target = torch.tensor(batch.obs_next.features, dtype=torch.float32).to(self.device)
         else:
-            obs_target = batch.obs.features
+            obs_target = batch.obs_next.features
         
         values, counts = torch.unique(r_target.view(-1), return_counts=True)
         target_list = r_target.tolist()
@@ -204,7 +205,7 @@ class SFBert(BasePolicy):
         if self.use_reconstruction_loss:
             self.dec_optim.zero_grad()
 
-        phis = self.phi_nn(batch.obs.features)
+        phis = self.phi_nn(obs_target)
         r_pred = torch.bmm(phis.unsqueeze(1), w.unsqueeze(2)).squeeze()
 
         reward_errors = (r_pred - r_target).pow(2)
