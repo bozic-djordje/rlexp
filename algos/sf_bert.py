@@ -113,16 +113,20 @@ class SFBert(BasePolicy):
             # Retrieve embeddings for instructions
             w = self.instr_to_embedding(instrs=batch.obs.instr)
             
-            # shape: (batch_dim, phi_dim)
-            phi = self.phi_nn(numerical_features)
             # shape: (batch_dim, num_actions, embedding_dim)
-            psi = self.psi_nn(phi)
+            phi_sa = self.phi_nn(numerical_features)
+            _, num_actions, _ = phi_sa.shape
+
+            phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+            psi_a = [self.psi_nn(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_a]
+            # shape: (batch_dim, num_actions, embedding_dim)
+            psi = torch.cat(psi_a, dim=1)
+            
             # shape: (batch_dim, num_actions)
             q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
-            
             dist = Categorical(logits=q_logits)
-            act = dist.sample()
-            # act = argmax_random_tiebreak(q_logits)
+            act = argmax_random_tiebreak(q_logits)
+            # act = dist.sample()
         return Batch(act=act, state=state, dist=dist)
     
     def psi_update(self, batch: Batch) -> float:
@@ -140,32 +144,37 @@ class SFBert(BasePolicy):
         # Get the active instruction when the transition was played
         w = self.instr_to_embedding(instrs=batch.obs.instr)
         
+        # Get phi(s,a) for each action a \in A for a given state s
         with torch.no_grad():
-            phis = self.phi_nn(batch.obs.features)
+            phi_sa = self.phi_nn(batch.obs.features)
+            phis_selected = phi_sa[torch.arange(batch_size), acts_selected, :]
+        _, num_actions, _ = phi_sa.shape
         
-        # Get the relevant Psi(s,a) vector for the stored transition. 
+        # Run each phi_sa through the psi network individually to obtain successor features
+        phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+        psi_a = [self.psi_nn(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_a]
+        # shape: (batch_dim, num_actions, embedding_dim)
+        psis = torch.cat(psi_a, dim=1)
+        
         # Psi outputs need to be converted to Q-values to get the optimal action to index Psi outputs
-        # Psi(s,a) \in (batch_size, num_actions, psi_dim)
-        
-        psis = self.psi_nn(phis)
-        # Q(s,a) \in (batch_size, num_actions)
+        # shape (batch_size, embedding_dim)
         psis_selected = psis[torch.arange(batch_size), acts_selected, :]
 
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
         with torch.no_grad():
-            # Do the same Psi -> Q conversion and Psi slicing as before, only for the next state in the transition this time
-            phis_next = self.phi_nn(batch.obs_next.features)
-            psis_next = self.psi_nn_t(phis_next)
+            
+            phi_sa_next = self.phi_nn(batch.obs_next.features)
+            phi_next_a = torch.chunk(phi_sa_next, chunks=num_actions, dim=1)
+            psis_next = [self.psi_nn_t(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_next_a]
+            psis_next = torch.cat(psis_next, dim=1)
+            
             qs_next = torch.bmm(psis_next, w.unsqueeze(2)).squeeze(2)
             acts_greedy = argmax_random_tiebreak(qs=qs_next)
             psis_next_greedy = psis_next[torch.arange(batch_size), acts_greedy, :]
             
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
-            # TODO: You lose recursion this way!
-            psis_target = phis_next + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
+            psis_target = phis_selected + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
 
-        # We update the "live" network, self.current. First we zero out the optimizer gradients
-        # and then we apply the update step using qs_selected and qs_target.
         self.psi_optim.zero_grad()
         td_error = (psis_selected - psis_target).pow(2).sum(dim=1)
         loss = (torch.tensor(batch.weight).to(self.device) * td_error).mean() if hasattr(batch, "weight") else td_error.mean()
@@ -175,15 +184,21 @@ class SFBert(BasePolicy):
         return td_error.detach().cpu().numpy()
     
     def phi_update(self, batch:Batch) -> float:
+        batch_size = len(batch)
         if not isinstance(batch.rew, torch.Tensor):
             r_target = torch.tensor(batch.rew, dtype=torch.float32).to(self.device)
         else:
             r_target = batch.rew
 
-        if not isinstance(batch.rew, torch.Tensor):
-            obs_target = torch.tensor(batch.obs_next.features, dtype=torch.float32).to(self.device)
+        if not isinstance(batch.act, torch.Tensor):
+            acts_selected = torch.tensor(batch.act, dtype=torch.int).to(self.device)
         else:
-            obs_target = batch.obs_next.features
+            acts_selected = batch.act
+
+        if not isinstance(batch.obs_next.features, torch.Tensor):
+            obs_next = torch.tensor(batch.obs_next.features, dtype=torch.float32).to(self.device)
+        else:
+            obs_next = batch.obs_next.features
         
         values, counts = torch.unique(r_target.view(-1), return_counts=True)
         target_list = r_target.tolist()
@@ -205,15 +220,18 @@ class SFBert(BasePolicy):
         if self.use_reconstruction_loss:
             self.dec_optim.zero_grad()
 
-        phis = self.phi_nn(obs_target)
-        r_pred = torch.bmm(phis.unsqueeze(1), w.unsqueeze(2)).squeeze()
+        phi_sa = self.phi_nn(batch.obs.features)
+        phis_selected = phi_sa[torch.arange(batch_size), acts_selected, :]
+        r_pred = torch.bmm(phis_selected.unsqueeze(1), w.unsqueeze(2)).squeeze()
 
         reward_errors = (r_pred - r_target).pow(2)
         reward_loss = (weights * reward_errors).sum()
 
         if self.use_reconstruction_loss:
-            s_hats = self.dec_nn(phis)
-            rec_loss = (s_hats - obs_target).pow(2).mean()
+            # Decoder network in this context is the forward dynamics prediction
+            # s_hat = dec(phi(s,a))
+            s_next_hats = self.dec_nn(phis_selected)
+            rec_loss = (s_next_hats - obs_next).pow(2).mean()
             total_loss = reward_loss + rec_loss
         else:
             rec_loss = torch.tensor(0., device=self.device)
@@ -340,16 +358,16 @@ if __name__ == '__main__':
             alpha=exp_hparams["priority_alpha"], 
             beta=exp_hparams["priority_beta_start"]
         )
-    
-    phi_nn = FCTrunk(
+
+    phi_nn = FCMultiHead(
         in_dim=train_env.observation_space["features"].shape[0],
+        num_heads=train_env.action_space.n,
         h=exp_hparams["phi_nn_dim"],
         device=device
     )
 
-    psi_nn = FCMultiHead(
+    psi_nn = FCTrunk(
         in_dim=exp_hparams["phi_nn_dim"][-1],
-        num_heads=train_env.action_space.n,
         h=exp_hparams["psi_nn_dim"],
         device=device
     )

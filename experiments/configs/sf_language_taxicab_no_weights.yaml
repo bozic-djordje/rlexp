@@ -24,8 +24,8 @@ experiment:
   update_per_step: [0.01, 0.5]
   
   # Algorithm hyper-parameters
-  phi_nn_dim: [[768]]
-  psi_nn_dim: [768]
+  phi_nn_dim: [[256, 768]]
+  psi_nn_dim: [[768, 768]]
   use_reconstruction_loss: false
   step_size: [1e-5, 1e-3]
   batch_size: [64, 256]
