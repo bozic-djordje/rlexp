@@ -75,16 +75,16 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
             beta=exp_hparams["priority_beta_start"]
         )
     
-    phi_nn = FCTrunk(
+    phi_nn = FCMultiHead(
         in_dim=train_env.observation_space["features"].shape[0],
+        num_heads=train_env.action_space.n,
         h=exp_hparams["phi_nn_dim"],
         device=device
     )
 
-    psi_nn = FCMultiHead(
+    psi_nn = FCTrunk(
         in_dim=exp_hparams["phi_nn_dim"][-1],
-        num_heads=train_env.action_space.n,
-        h=[exp_hparams["psi_nn_dim"]],
+        h=exp_hparams["psi_nn_dim"],
         device=device
     )
 
