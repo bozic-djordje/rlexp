@@ -9,6 +9,8 @@ grid:
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
 pomdp: false 
 easy_mode: true
+# If easy_mode is true, goto_mode is true
+goto_mode: true
 start_pos: null
 max_steps: 200
 slip_chance: 0

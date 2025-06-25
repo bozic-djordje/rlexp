@@ -20,7 +20,8 @@ class LanguageTaxicab(gym.Env):
             hparams=hparams,
             location_features=DEFAULT_FEATURES,
             store_path=store_path,
-            easy_mode=hparams["easy_mode"]
+            easy_mode=self._easy_mode,
+            goto_mode=hparams["goto_mode"] if "goto_mode" in hparams else self._easy_mode
         )
 
         self._common_adj_combs = common_adjective_combs

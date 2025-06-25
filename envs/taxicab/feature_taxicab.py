@@ -16,11 +16,13 @@ DEFAULT_FEATURES = [
 ]
 
 class FeatureTaxicab(gym.Env):
-    def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None, easy_mode:bool=False):
+    def __init__(self, hparams: Dict, location_features: List[Dict], store_path:str, origin_ind:int=None, dest_ind:int=None, easy_mode:bool=False, goto_mode:bool=False):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
-        # The cab already has the passenger in
+        # If agent is penalised for wrong passanger drop off location
         self._easy_mode = easy_mode
+        # If the cab already has the passenger in at the start. easy_mode encapsulates goto_mode.
+        self._goto_mode = goto_mode or easy_mode
         
         self._feature_map = {}
         self._feature_order = hparams["attribute_order"]
@@ -182,7 +184,7 @@ class FeatureTaxicab(gym.Env):
         else:
             self._agent_location = self.start_pos
         
-        if self._easy_mode:
+        if self._goto_mode:
             self._passenger_in = 1
             self._passenger_location = self._agent_location
 
@@ -222,7 +224,7 @@ class FeatureTaxicab(gym.Env):
         assert self._grid[self._agent_location] != 'W'
         
         # Handle non-movement pick up and drop passenger actions
-        if action == 4 and not self._easy_mode:
+        if action == 4 and not self._goto_mode:
             if self._passenger_in == 0 and self._passenger_location == self._agent_location:
                 self._passenger_in = 1
             else:
@@ -234,8 +236,10 @@ class FeatureTaxicab(gym.Env):
                 self._passenger_in = 0
                 is_terminal = True
                 reward = 20
-            elif not self._easy_mode:
-                reward = -10
+            else:
+                # We only penalise wrong drop off to the location which is among the points of interest
+                if not self._easy_mode and self._agent_location in self._poi.keys():
+                    reward = -10
         
         if self._passenger_in:
             self._passenger_location = self._agent_location

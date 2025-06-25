@@ -52,6 +52,8 @@ environment:
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   pomdp: true
   easy_mode: true
+  # If easy_mode is true, goto_mode is true
+  goto_mode: true
   max_steps: 200
   disc_fact: 0.99 #gamma
   start_pos: null
