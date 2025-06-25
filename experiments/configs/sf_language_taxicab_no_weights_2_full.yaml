@@ -34,7 +34,7 @@ experiment:
   cycle_update_steps: [20, 200]
   episode_per_test: 1
 
-  buffer_size: 50000
+  buffer_size: 500000
   prioritised_replay: false
   # How strongly priorities affect sampling
   priority_alpha: 0.7
