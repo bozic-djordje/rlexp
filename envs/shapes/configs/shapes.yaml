@@ -1,0 +1,50 @@
+# 'W' - wall
+# ' ' - empty
+# '*' - goal position in training
+# 'T' - potential goal position in the test set (placement not allowed in training)
+grid:
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
+  - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+# If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
+pomdp: false
+start_pos: null
+max_steps: 200
+slip_chance: 0
+seed: 1
+train_test_split: 0.7
+
+use_features: [shape, colour]
+features:
+  # circle, triangle, square, diamond, star, key
+  shape: [ball, triangle, square, diamond, star, key]
+  # green, blue, red, yellow
+  colour: [red, blue, green, yellow]
+
+goal_formulation:
+  - colour shape
+  - shape which is colour
+
+task_names: [go_to, pick_up, retrieve]
+task_id: [go_to] 
+
+go_to:
+  - phrase: Go to goal_formulation.
+
+pick_up:
+  - phrase: Pick up goal_formulation.
+
+retrieve:
+  - phrase: Retrieve goal_formulation.
+
+default_feature: "0" 
+
+# 8 combinations total with green hospital being fixed
+# green hospitals must not exist in the train or test sets
+hard_test_attributes:
+  colour: null
+  building: null
