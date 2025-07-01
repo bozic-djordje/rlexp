@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Tuple
 import os
+from copy import deepcopy
 import numpy as np
 import torch
 import gymnasium as gym
@@ -12,7 +13,8 @@ DEFAULT_OBJECTS = [
         {
             "loc": (1,1),
             "shape": "ball",
-            "colour": "red"
+            "colour": "red",
+            "is_goal": True
         },
         {
             "loc": (1, 8),
@@ -21,6 +23,9 @@ DEFAULT_OBJECTS = [
         }
     ]
 
+# TODO: Remove this comment. This class knows how to make single-task Shapes environment, but not multi-task. That means that
+# it needs to receive objects and their locations from an external code or class. External code or class thus controls how often goals,
+# objects, and their locations are resampled and what their values should be. This is because their values depend on task utterance, which is language-based feature.
 class Shapes(gym.Env):
     def __init__(self, grid: List, feature_order: List, features: Dict, objects: List[Dict], store_path:str, pomdp:bool=False, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0):
         self._store_path = store_path
@@ -28,10 +33,11 @@ class Shapes(gym.Env):
         
         self._feature_order = feature_order
         self._features = features
-        self._feature_map = self._init_feature_map(features=features)
+        self._feature_map, self._feature_rmap = self._init_feature_map(features=features)
         self._default_feature = default_feature
 
-        self._game_map = self._init_game_map(grid=grid, objects=objects)
+        self._grid = np.array(grid)
+        self._objects = objects
         
         self._pomdp = pomdp
         self._slip_chance = slip_chance
@@ -43,6 +49,15 @@ class Shapes(gym.Env):
             3: np.array([0, 1]),  # right
             4: np.array([0, 0]), # pick up item
             5: np.array([0, 0]) # drop item
+        }
+
+        self._action_to_str = {
+            0: "up",
+            1: "down",
+            2: "left",
+            3: "right",
+            4: "pickup",
+            5: "drop"
         }
 
         self._max_steps = max_steps
@@ -57,149 +72,89 @@ class Shapes(gym.Env):
 
         # [channels, height, width]
         # channels = (agent_present, shape_feature, colour_feature)
+        self._num_channels = len(self._feature_order) + 1
         self.observation_space = gym.spaces.Box(
             low=-1,
             high=6,
-            shape=(len(self._feature_order), self._grid.shape[0], self._grid.shape[0]),
+            shape=(self._num_channels, self._grid.shape[0], self._grid.shape[0]),
             dtype=np.int8
         )
         
-        self._poi = None
         self._goal_location = None
-        _ = self.reset(options={"location_features": self._location_features, "origin_ind": origin_ind, "dest_ind": dest_ind})
+        self._agent_location = None
+        self._agent_orientation = None
+        _ = self.reset(options={"objects": objects})
 
     def _init_feature_map(self, features: Dict) -> Dict:
         feature_map = {}
-        for feature_name, values in features.items():
+        feature_rmap = {}
+        i = 0
+        for _, values in features.items():
+            feature_rmap[i] = {}
+            
             for ind, name in enumerate(values):
                 feature_map[name] = ind+1
-        return feature_map
+                feature_rmap[i][ind+1] = name
+
+            i+=1
+        return feature_map, feature_rmap
     
-    def _init_game_map(self, grid: List[List], objects: List[Dict]):
-        np_grid = np.array(grid)
-        game_map = np.zeros((len(self._feature_order), np_grid.shape[0], np_grid.shape[1]), dtype=np.int8)
-        walls = np.equal(np_grid, 'W')
+    def _init_game_map(self, objects: List[Dict]=None):
+        game_map = np.zeros((self._num_channels, self._grid.shape[0], self._grid.shape[1]), dtype=np.int8)
+        walls = np.equal(self._grid, 'W')
         game_map[:, walls] = -1
         
-        for obj in objects:
+        if objects is None:
+            objects = self._objects
+        
+        goal_location = None
+        agent_location = self._init_start_location()
+        game_map[0, agent_location[0], agent_location[1]] = 1
+
+        obj_cpy = deepcopy(objects)
+        for obj in obj_cpy:
             loc = obj.pop("loc")
+            is_goal = obj.pop("is_goal", False)
+            if is_goal:
+                goal_location = loc
+            
             for feature, value in obj.items():
-                channel_index = self._feature_order.index(feature)
+                channel_index = self._feature_order.index(feature) + 1
                 index = (channel_index,) + loc
                 game_map[index] = self._feature_map[value]
         
-        return game_map
-
-
+        return game_map, goal_location, agent_location
+    
+    def _init_start_location(self):
+        empty_locations = np.where(self._grid == ' ')
+        candidates = list(zip(*empty_locations))
+        loc = self.rng.choice(candidates)
+        return tuple(loc)
+    
     @property
     def obs(self) -> gym.spaces.Box:
-        features = [self._agent_location[0], self._agent_location[1], self._passenger_in]
-        if not self._pomdp:
-            origin_dest_features = [self._passenger_location[0], self._passenger_location[1], self._goal_location[0], self._goal_location[1]]
-        else:
-            # TODO: Should we just add zeros, or add nothing at all?
-            origin_dest_features = [0, 0, 0, 0]
-        features.extend(origin_dest_features)
-
-        if self._agent_location in self._poi:
-            obs_features = self._poi[self._agent_location]["feature_value_list"]
-        else:
-            obs_features = self._default_feature
-        features.extend(obs_features)
-        return np.array(features, dtype=int)
+        # TODO: Implement partially observable box sometime in the future
+        return self._game_map
     
     @property 
     def wall_mask(self) -> np.ndarray:
-        return self._walls
+        return np.equal(self._grid, 'W')
     
     @property
     def grid_shape(self) -> np.ndarray:
         return self._grid.shape
-        
-    def _assign_feature_values(self, location_features:List[Dict]) -> Tuple[List, str]:
-        for attr_dict in location_features:
-            feature_value_str = ""
-            feature_value_lst = []
-            feature_asset_name = ""
-            for feature_name in self._features.keys():
-                feature_text = attr_dict[feature_name]
-                feature_value = self._features[feature_name].index(feature_text) + 1
-                feature_value_str += str(feature_value)
-                feature_value_lst.append(feature_value)
-                feature_asset_name += f'{feature_text}_'
-            # Hack for compatibility with legacy asset names where filled was one of the features
-            feature_asset_name += "filled"
-            
-            # Feature values stored as a string
-            attr_dict["feature_value_text"] = feature_value_str
-            # Feature values stored as an array of integers
-            attr_dict["feature_value_list"] = feature_value_lst
-            attr_dict["colour_code"] = COLOUR_MAP[attr_dict["colour"]]
-            attr_dict["png_path"] = os.path.join(self._assets_path, f'{feature_asset_name}.png')
-        return location_features
-
-    def _pick_random_start(self):
-        x = self.rng.integers(1, self.grid_shape[0])
-        y = self.rng.integers(1, self.grid_shape[1])
-        while self._grid[x, y] == 'W' or (x, y) == self._goal_location or self._grid[x, y] == 'C' :
-            x = self.rng.integers(1, self.grid_shape[0])
-            y = self.rng.integers(1, self.grid_shape[1])
-        return x, y
-
-    def _init_points_of_interest(self, location_features: List[Dict], origin_ind:int, dest_ind:int) -> Dict:
-        poi = {}
-        i = 0
-        check = 0
-
-        for row in range(self._grid.shape[0]):
-            for col in range(self._grid.shape[1]):
-                if self._grid[row, col] == 'C':
-                    poi[(row, col)] = location_features[i]
-                    if i == origin_ind:
-                        self._passenger_location = (row, col)
-                        check += 1
-                    if i == dest_ind:
-                        self._goal_location = (row, col)
-                        check += 1
-                    i += 1
-        assert(check == 2)
-        assert(self._goal_location != self._passenger_location)
-        return poi
-
-    def reset(self, seed: Optional[int]=None, options: Optional[dict]=None):
+    
+    def reset(self, seed: Optional[int]=None, options: Optional[dict]={}):
         """ Reset the environment and return the initial state number
         """
         super().reset(seed=seed)
         self._steps = 0
         info = {}
-        # By default we generate random origin and destination locations
-        origin_ind, dest_ind = self._generate_poi_indices()
 
-        # If the reset was called with options then we update env parameters
-        # before initialising points of interest. This corresponds to the new task!
-        # If origin and destination locations are passed in options, we use those
-        if options and 'location_features' in options:
-            self._location_features = self._assign_feature_values(location_features=options['location_features'])    
-            if 'origin_ind' in options and options['origin_ind'] is not None:
-                origin_ind = options['origin_ind']
-            if 'dest_ind' in options and options['dest_ind'] is not None:
-                dest_ind = options['dest_ind']
-            
-        self._poi = self._init_points_of_interest(
-            location_features=self._location_features,
-             origin_ind=origin_ind, 
-             dest_ind=dest_ind
-        )
-        
-        if self._random_start:
-            self._agent_location = self._pick_random_start()
-        else:
-            self._agent_location = self.start_pos
-        
-        if self._goto_mode:
-            self._passenger_in = 1
-            self._passenger_location = self._agent_location
-
+        objects = options.get("objects", None)
+        self._game_map, self._goal_location, self._agent_location = self._init_game_map(objects=objects)
+        self._agent_orientation = 3
+   
         assert self._grid[self._agent_location] != 'W'
         return self.obs, info
 
@@ -209,13 +164,17 @@ class Shapes(gym.Env):
             - 1: go down
             - 2: go left
             - 3: go right
-            - 4: pick passenger up
-            - 5: drop passenger
+            - 4: pick up #not used for now
+            - 5: drop #not used for now
         """
         if isinstance(action, torch.Tensor) or isinstance(action, np.ndarray):
             action = action.item()
         assert(action >= 0)
         assert(action <= 5)
+
+        if action < 4:
+            self._agent_orientation = action
+        
         is_terminal = False
         reward = -1
 
@@ -230,31 +189,14 @@ class Shapes(gym.Env):
             elif action == 3:
                 action = self.rng.choice([0, 1])
         
-        agent_location = tuple(self.obs[0:2] + self._action_to_direction[action])
+        agent_location = tuple(list(self._agent_location) + self._action_to_direction[action])
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
         
-        # Handle non-movement pick up and drop passenger actions
-        if action == 4 and not self._goto_mode:
-            if self._passenger_in == 0 and self._passenger_location == self._agent_location:
-                self._passenger_in = 1
-            else:
-                reward = -10
-        elif action == 5:
-            # The episode ends only if passenger is dropped off to the correct location
-            # Otherwise agent gets -10 penalty
-            if self._passenger_in == 1 and self._agent_location == self._goal_location:
-                self._passenger_in = 0
-                is_terminal = True
-                reward = 20
-            else:
-                # We only penalise wrong drop off to the location which is among the points of interest
-                if not self._easy_mode and self._agent_location in self._poi.keys():
-                    reward = -10
-        
-        if self._passenger_in:
-            self._passenger_location = self._agent_location
+        if self._agent_location == self._goal_location:
+            is_terminal = True
+            reward = 20
 
         self._steps += 1
         info = {}
@@ -262,8 +204,30 @@ class Shapes(gym.Env):
         if self._max_steps is not None and self._steps >= self._max_steps:
             truncated = True
         return self.obs, reward, is_terminal, truncated, info
+    
+    def _get_asset_path(self, features: List) -> str:
+        # Features with relevant assets have non zero values
+        if sum(features) < len(features):
+            return None
+        
+        asset_name = ""
+        for channel_ind, feature_value in enumerate(features):
+            asset_name += f"{self._feature_rmap[channel_ind][feature_value]}_"
+        
+        asset_name = f"{asset_name[:-1]}.png"
+        asset_path = os.path.join(ASSETS_PATH, asset_name)
+        return asset_path
+    
+    def _get_agent_asset_path(self) -> str:
+        asset_name = f"agent_{self._action_to_str[self._agent_orientation]}.png"
+        asset_path = os.path.join(ASSETS_PATH, asset_name)
+        return asset_path
+    
+    def _get_goal_asset_path(self) -> str:
+        asset_path = os.path.join(ASSETS_PATH, "goal.png")
+        return asset_path
 
-    def _render_feature_grid(self, cell_size:int=60, use_png=True):
+    def _render_feature_grid(self, cell_size:int=60):
         """Render the grid with color fill in a vectorized manner.
         Return the upscaled color image (no text yet)."""
         rows, cols = self._grid.shape
@@ -272,103 +236,74 @@ class Shapes(gym.Env):
         color_arr = np.full((rows, cols, 3), fill_value=(255, 255, 255), dtype=np.uint8)
 
         # 2) Assign black for 'W' walls
-        color_arr[self._walls] = (0, 0, 0)  # black
-
-        # 3) Assign feature colors
-        if use_png is False:
-            for fkey, fdata in self._poi.items():
-                color_arr[fkey] = fdata["colour_code"]
+        color_arr[self.wall_mask] = (0, 0, 0)  # black
 
         # 4) Upscale each cell to cell_size x cell_size
         image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
         return image
     
-    def _add_features(self, image, cell_size=60, use_png=True, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
+    def _add_features(self, image, cell_size=60, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
         """
         For each cell that has a feature (F0, F1, etc.):
-        - If use_png=True, overlay the PNG tinted with color at 50% transparency
         - Otherwise, place the two letters in the cell
         """
         # Pre-load and resize PNG images if needed
         png_cache = {}
-        text_color = (0, 0, 0)  # black text
-        small_size = int(cell_size/2)
+        small_size = cell_size
 
-        if use_png:
-            for loc, feature_dict in self._poi.items():
-                png_cache[loc] = load_and_resize_png(feature_dict["png_path"], cell_size, keep_alpha=False)
-                png_dir = os.path.dirname(feature_dict["png_path"])
-            agent_image = load_and_resize_png(os.path.join(png_dir, "taxi.png"), small_size, keep_alpha=True)
-            passenger_image = load_and_resize_png(os.path.join(png_dir, "passenger.png"), small_size, keep_alpha=True)
-            destination_image = load_and_resize_png(os.path.join(png_dir, "destination.png"), small_size, keep_alpha=True)
-            
+        agent_image = load_and_resize_png(
+            path=self._get_agent_asset_path(), 
+            cell_size=cell_size,
+            keep_alpha=True
+        )
+
+        goal_image = load_and_resize_png(
+            path=self._get_goal_asset_path(),
+            cell_size=cell_size,
+            keep_alpha=True
+        )
+
+        for r in range(self._game_map.shape[1]):
+            for c in range(self._game_map.shape[2]):
+                features = list(self._game_map[1:, r, c])
+                asset_path = self._get_asset_path(features=features)
+                if asset_path is not None:
+                    png_cache[(r,c)] = load_and_resize_png(
+                        path=asset_path, 
+                        cell_size=cell_size, 
+                        keep_alpha=False
+                    )
+        
         # Iterate over each feature type
-        for loc, feature_dict in self._poi.items():
-            letters = feature_dict["feature_value_text"]
+        for loc, val in png_cache.items():
             r = loc[0]
             c = loc[1]
 
             y0, y1 = r * cell_size, (r + 1) * cell_size
             x0, x1 = c * cell_size, (c + 1) * cell_size
+            image[y0:y1, x0:x1] = val
 
-            if use_png:
-                image[y0:y1, x0:x1] = png_cache[loc]
-            else:
-                # Place four letters in a 2×2 arrangement, shifted left/down.
-                # 'quarter' is 1/4 of the cell size; 
-                # these define approximate "centers" for each quadrant.
-                quarter = cell_size // 4
-
-                # Define small shifts (in pixels)
-                # negative x_shift => moves text to the left
-                # positive y_shift => moves text down
-                x_shift, y_shift = 5, 5
-
-                # Quadrant centers (x0, y0 is the top-left corner of the cell):
-                # Then we shift them slightly left (subtract from x) and down (add to y).
-                pos1 = (x0 + quarter - x_shift,      y0 + quarter + y_shift)        # top-left
-                pos2 = (x0 + 3 * quarter - x_shift,  y0 + quarter + y_shift)        # top-right
-                # pos3 = (x0 + quarter - x_shift,      y0 + 3 * quarter + y_shift)    # bottom-left
-                # pos4 = (x0 + 3 * quarter - x_shift,  y0 + 3 * quarter + y_shift)    # bottom-right
-
-                cv2.putText(image, letters[0], pos1, font, font_scale,
-                            text_color, thickness, lineType=cv2.LINE_AA)
-                cv2.putText(image, letters[1], pos2, font, font_scale,
-                            text_color, thickness, lineType=cv2.LINE_AA)
-                # cv2.putText(image, letters[2], pos3, font, font_scale,
-                #             text_color, thickness, lineType=cv2.LINE_AA)
-                # cv2.putText(image, letters[3], pos4, font, font_scale,
-                #             text_color, thickness, lineType=cv2.LINE_AA)
-
-        # Plot current position of taxicab and passenger
-        if use_png:
-            for loc, overlay_image in zip([self._agent_location, self._passenger_location], [agent_image, passenger_image]):
-                y0, y1 = loc[0] * cell_size, (loc[0] + 1) * cell_size
-                x0, x1 = loc[1] * cell_size, (loc[1] + 1) * cell_size
-                x_offset = x0 + (cell_size - small_size) // 2
-                y_offset = y0 + (cell_size - small_size) // 2
-                overlay_with_alpha(image, overlay_image, x_offset, y_offset)
-            
-            y0, y1 = self._goal_location[0] * cell_size, (self._goal_location[0] + 1) * cell_size
-            x0, x1 = self._goal_location[1] * cell_size, (self._goal_location[1] + 1) * cell_size
-            x_offset = x0 + (cell_size - small_size) // 2
-            y_offset = y0 + (cell_size - small_size) // 2
-            overlay_with_alpha(image, destination_image, x_offset, y_offset)
-            
-        else:
-            for loc, symbol in zip([self._agent_location, self._passenger_location, self._goal_location], ['T', 'P', 'D']):
-                y0, y1 = loc[0] * cell_size, (loc[0] + 1) * cell_size
-                x0, x1 = loc[1] * cell_size, (loc[1] + 1) * cell_size
-                cell_center = (x0 + cell_size // 2, y0 + cell_size // 2)
-                cv2.putText(image, symbol, cell_center, font, font_scale, text_color, thickness, lineType=cv2.LINE_AA)
+        # Plot current agent position
+        y0, y1 = self._agent_location[0] * cell_size, (self._agent_location[0] + 1) * cell_size
+        x0, x1 = self._agent_location[1] * cell_size, (self._agent_location[1] + 1) * cell_size
+        x_offset = x0 + (cell_size - small_size) // 2
+        y_offset = y0 + (cell_size - small_size) // 2
+        overlay_with_alpha(image, agent_image, x_offset, y_offset)
+        
+        # Plot goal position
+        y0, y1 = self._goal_location[0] * cell_size, (self._goal_location[0] + 1) * cell_size
+        x0, x1 = self._goal_location[1] * cell_size, (self._goal_location[1] + 1) * cell_size
+        x_offset = x0 + (cell_size - small_size) // 2
+        y_offset = y0 + (cell_size - small_size) // 2
+        overlay_with_alpha(image, goal_image, x_offset, y_offset)
     
-    def render_frame(self, use_png:bool=True) -> np.ndarray:
-        image = self._render_feature_grid(use_png=use_png)
-        self._add_features(image=image, use_png=use_png)
+    def render_frame(self) -> np.ndarray:
+        image = self._render_feature_grid()
+        self._add_features(image=image)
         return image
 
-    def store_frame(self, plot_name:str='table', use_png:bool=True) -> None:
-        image = self.render_frame(use_png=use_png)
+    def store_frame(self, plot_name:str='table') -> None:
+        image = self.render_frame()
         output_path = os.path.join(self._store_path, f'{plot_name}.png')
         cv2.imwrite(output_path, image)
 
@@ -396,24 +331,17 @@ if __name__ == '__main__':
         objects=DEFAULT_OBJECTS,
         store_path=store_path
     )
-    # env.store_frame(use_png=True)
+    env.store_frame()
     
-    # i = 0
-    # for episode in tqdm(range(hparams['n_episodes'])):
-    #     origin_ind = np.random.randint(0, len(DEFAULT_FEATURES))
-    #     dest_ind = (origin_ind + 1) % len(DEFAULT_FEATURES)
-    #     options = {
-    #         "location_features": DEFAULT_FEATURES,
-    #         "origin_ind": origin_ind, 
-    #         "dest_ind": dest_ind
-    #     }
-    #     obs, _ = env.reset(options=options)
-    #     done = False
+    i = 0
+    for episode in tqdm(range(3)):
+        obs, _ = env.reset(options={})
+        done = False
 
-    #     while not done:
-    #         action = env.action_space.sample()
-    #         next_obs, reward, terminated, truncated, _ = env.step(action)
-    #         obs = next_obs
-    #         done = terminated or truncated
-    #     env.store_frame(plot_name=f"final_step_task_{i}", use_png=True)
-    #     i+= 1
+        while not done:
+            action = env.action_space.sample()
+            next_obs, reward, terminated, truncated, _ = env.step(action)
+            obs = next_obs
+            done = terminated or truncated
+        env.store_frame(plot_name=f"final_step_task_{i}")
+        i+= 1
