@@ -10,13 +10,14 @@ grid:
   - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
-pomdp: false
-start_pos: null
+goal_channel: false
+num_objects: 2
+resample_episodes: 1
 max_steps: 200
 slip_chance: 0
 seed: 1
-train_test_split: 0.7
 
+# use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
 use_features: [shape, colour]
 features:
   # circle, triangle, square, diamond, star, key
@@ -24,21 +25,17 @@ features:
   # green, blue, red, yellow
   colour: [red, blue, green, yellow]
 
-goal_formulation:
-  - colour shape
-  - shape which is colour
-
-task_names: [go_to, pick_up, retrieve]
-task_id: [go_to] 
+task_names: [go_to, go_to_easy, pick_up, retrieve]
+task_id: go_to 
 
 go_to:
-  - phrase: Go to goal_formulation.
+  - Go to colour shape.
 
 pick_up:
-  - phrase: Pick up goal_formulation.
+  - Pick up goal_formulation.
 
 retrieve:
-  - phrase: Retrieve goal_formulation.
+  - Retrieve goal_formulation.
 
 default_feature: "0" 
 

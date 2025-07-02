@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from typing import Dict, List, Optional, Tuple
 import os
 from copy import deepcopy
@@ -5,7 +6,7 @@ import numpy as np
 import torch
 import gymnasium as gym
 import cv2
-from utils import load_and_resize_png, overlay_with_alpha, COLOUR_MAP
+from utils import load_and_resize_png, overlay_with_alpha
 
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -23,23 +24,19 @@ DEFAULT_OBJECTS = [
         }
     ]
 
-# TODO: Remove this comment. This class knows how to make single-task Shapes environment, but not multi-task. That means that
-# it needs to receive objects and their locations from an external code or class. External code or class thus controls how often goals,
-# objects, and their locations are resampled and what their values should be. This is because their values depend on task utterance, which is language-based feature.
+
 class Shapes(gym.Env):
-    def __init__(self, grid: List, feature_order: List, features: Dict, objects: List[Dict], store_path:str, pomdp:bool=False, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0):
+    def __init__(self, objects: List[Dict], grid: List, feature_order: List, features: Dict, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0, goal_channel:bool=False):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         
         self._feature_order = feature_order
         self._features = features
-        self._feature_map, self._feature_rmap = self._init_feature_map(features=features)
+        self._feature_map, self._feature_rmap = self._init_feature_map()
         self._default_feature = default_feature
 
         self._grid = np.array(grid)
         self._objects = objects
-        
-        self._pomdp = pomdp
         self._slip_chance = slip_chance
         
         self._action_to_direction = {
@@ -72,7 +69,11 @@ class Shapes(gym.Env):
 
         # [channels, height, width]
         # channels = (agent_present, shape_feature, colour_feature)
-        self._num_channels = len(self._feature_order) + 1
+        # or
+        # channels = (agent, goal, shape_feature, colour_feature)
+        self._goal_channel = goal_channel
+        self._first_feature_ind = 1 + int(goal_channel)
+        self._num_channels = len(self._feature_order) + 1 + int(goal_channel)
         self.observation_space = gym.spaces.Box(
             low=-1,
             high=6,
@@ -85,11 +86,13 @@ class Shapes(gym.Env):
         self._agent_orientation = None
         _ = self.reset(options={"objects": objects})
 
-    def _init_feature_map(self, features: Dict) -> Dict:
+    def _init_feature_map(self) -> Dict:
         feature_map = {}
         feature_rmap = {}
         i = 0
-        for _, values in features.items():
+
+        for feature_name in self._feature_order:
+            values = self._features[feature_name]
             feature_rmap[i] = {}
             
             for ind, name in enumerate(values):
@@ -99,19 +102,16 @@ class Shapes(gym.Env):
             i+=1
         return feature_map, feature_rmap
     
-    def _init_game_map(self, objects: List[Dict]=None):
+    def _init_game_map(self):
         game_map = np.zeros((self._num_channels, self._grid.shape[0], self._grid.shape[1]), dtype=np.int8)
         walls = np.equal(self._grid, 'W')
         game_map[:, walls] = -1
-        
-        if objects is None:
-            objects = self._objects
         
         goal_location = None
         agent_location = self._init_start_location()
         game_map[0, agent_location[0], agent_location[1]] = 1
 
-        obj_cpy = deepcopy(objects)
+        obj_cpy = deepcopy(self._objects)
         for obj in obj_cpy:
             loc = obj.pop("loc")
             is_goal = obj.pop("is_goal", False)
@@ -119,9 +119,12 @@ class Shapes(gym.Env):
                 goal_location = loc
             
             for feature, value in obj.items():
-                channel_index = self._feature_order.index(feature) + 1
+                channel_index = self._feature_order.index(feature) + self._first_feature_ind
                 index = (channel_index,) + loc
                 game_map[index] = self._feature_map[value]
+
+        if self._goal_channel:
+            game_map[1, goal_location[0], goal_location[1]] = 1
         
         return game_map, goal_location, agent_location
     
@@ -144,6 +147,10 @@ class Shapes(gym.Env):
     def grid_shape(self) -> np.ndarray:
         return self._grid.shape
     
+    @property
+    def agent_location(self) -> Tuple:
+        return tuple(self._agent_location)
+    
     def reset(self, seed: Optional[int]=None, options: Optional[dict]={}):
         """ Reset the environment and return the initial state number
         """
@@ -152,20 +159,23 @@ class Shapes(gym.Env):
         info = {}
 
         objects = options.get("objects", None)
-        self._game_map, self._goal_location, self._agent_location = self._init_game_map(objects=objects)
+        if objects is not None:
+            self._objects = objects
+        
+        self._game_map, self._goal_location, self._agent_location = self._init_game_map()
         self._agent_orientation = 3
    
         assert self._grid[self._agent_location] != 'W'
         return self.obs, info
-
-    def step(self, action):
+    
+    def _movement(self, action) -> None:
         """ Perform an action in the environment. Actions are as follows:
             - 0: go up
             - 1: go down
             - 2: go left
             - 3: go right
-            - 4: pick up #not used for now
-            - 5: drop #not used for now
+            - 4: pick up
+            - 5: drop
         """
         if isinstance(action, torch.Tensor) or isinstance(action, np.ndarray):
             action = action.item()
@@ -174,9 +184,6 @@ class Shapes(gym.Env):
 
         if action < 4:
             self._agent_orientation = action
-        
-        is_terminal = False
-        reward = -1
 
         # Update agent location for the movement actions
         if self.rng.random() < self._slip_chance:
@@ -193,16 +200,27 @@ class Shapes(gym.Env):
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
-        
-        if self._agent_location == self._goal_location:
-            is_terminal = True
-            reward = 20
 
+    @abstractmethod
+    def step(self, action):
+        """ Perform an action in the environment. Actions are as follows:
+            - 0: go up
+            - 1: go down
+            - 2: go left
+            - 3: go right
+            - 4: pick up #not used for now
+            - 5: drop #not used for now
+        """
+        self._movement(action=action)
         self._steps += 1
         info = {}
         truncated = False
         if self._max_steps is not None and self._steps >= self._max_steps:
             truncated = True
+        
+        # Define these in subclass
+        reward = None
+        is_terminal = None
         return self.obs, reward, is_terminal, truncated, info
     
     def _get_asset_path(self, features: List) -> str:
@@ -242,7 +260,7 @@ class Shapes(gym.Env):
         image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
         return image
     
-    def _add_features(self, image, cell_size=60, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=0.6, thickness=1):
+    def _add_features(self, image, cell_size=60):
         """
         For each cell that has a feature (F0, F1, etc.):
         - Otherwise, place the two letters in the cell
@@ -265,7 +283,7 @@ class Shapes(gym.Env):
 
         for r in range(self._game_map.shape[1]):
             for c in range(self._game_map.shape[2]):
-                features = list(self._game_map[1:, r, c])
+                features = list(self._game_map[self._first_feature_ind:, r, c])
                 asset_path = self._get_asset_path(features=features)
                 if asset_path is not None:
                     png_cache[(r,c)] = load_and_resize_png(
@@ -308,6 +326,52 @@ class Shapes(gym.Env):
         cv2.imwrite(output_path, image)
 
 
+class ShapesGoto(Shapes):
+    def step(self, action):
+        # Superclass will perform the agent movement but will not do any of the additional actions
+        # or provide sensible reward
+        obs, _, _, truncated, info = super().step(action)
+        
+        confounder_locations = set([obj["loc"] for obj in self._objects if "is_goal" not in obj or not obj["is_goal"]])
+        is_terminal = False
+        reward = -1
+
+        if self._agent_location == self._goal_location:
+            is_terminal = True
+            reward = 20
+        elif self._agent_location in confounder_locations:
+            reward = -10
+        
+        return obs, reward, is_terminal, truncated, info
+    
+
+# TODO: You do not get negative rewards when you step on an object that isn't goal object
+class ShapesGotoEasy(Shapes):
+    def step(self, action):
+        obs, _, _, truncated, info = super().step(action)
+        
+        is_terminal = False
+        reward = -1
+
+        if self._agent_location == self._goal_location:
+            is_terminal = True
+            reward = 20
+        
+        return obs, reward, is_terminal, truncated, info
+
+
+# TODO
+class ShapesPickup(Shapes):
+    def step(self, action):
+        return super().step(action)
+
+
+# TODO: Equivalent to Taxicab
+class ShapesRetrieve(Shapes):
+    def step(self, action):
+        return super().step(action)
+
+
 if __name__ == '__main__':
     from utils import setup_artefact_paths
     from tqdm import tqdm
@@ -322,14 +386,19 @@ if __name__ == '__main__':
     grid = hparams["grid"]
     feature_order = hparams["use_features"]
     features = hparams["features"]
+    
+    for key in features.keys():
+        if key not in set(feature_order):
+            for obj in DEFAULT_OBJECTS:
+                obj.pop(key)
 
-
-    env = Shapes(
+    env = ShapesGoto(
+        objects=DEFAULT_OBJECTS,
         grid=grid,
         feature_order=feature_order,
         features=features,
-        objects=DEFAULT_OBJECTS,
-        store_path=store_path
+        store_path=store_path,
+        goal_channel=False
     )
     env.store_frame()
     
