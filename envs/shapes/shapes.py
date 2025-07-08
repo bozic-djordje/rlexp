@@ -77,7 +77,7 @@ class Shapes(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-1,
             high=6,
-            shape=(self._num_channels, self._grid.shape[0], self._grid.shape[0]),
+            shape=(self._num_channels, self._grid.shape[0], self._grid.shape[1]),
             dtype=np.int8
         )
         
@@ -181,6 +181,7 @@ class Shapes(gym.Env):
             action = action.item()
         assert(action >= 0)
         assert(action <= 5)
+        self._game_map[0, self.agent_location[0], self.agent_location[1]] = 0
 
         if action < 4:
             self._agent_orientation = action
@@ -200,6 +201,7 @@ class Shapes(gym.Env):
         if self._grid[agent_location] != 'W':
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
+        self._game_map[0, self.agent_location[0], self.agent_location[1]] = 1
 
     @abstractmethod
     def step(self, action):

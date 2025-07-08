@@ -38,9 +38,3 @@ retrieve:
   - Retrieve goal_formulation.
 
 default_feature: "0" 
-
-# 8 combinations total with green hospital being fixed
-# green hospitals must not exist in the train or test sets
-hard_test_attributes:
-  colour: null
-  building: null

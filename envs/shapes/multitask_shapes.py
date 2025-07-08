@@ -10,9 +10,31 @@ import re
 from copy import deepcopy
 from envs.shapes.shapes import Shapes, ShapesGoto, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
 
-# TODO: Remove this comment. This class handles multitask Shapes environment where instructions are given to the agent in the natural language. It receives a set of allowed objects
-# which need to be created by a dataset factory (so that we have separate train/test sets that can test symbol grounding). This class will resample task goals every so often
-# among the permissible goals as dictated by the allowed_objects.
+
+def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
+        # Split the sentence into words and punctuation
+        tokens = re.findall(r'\w+|[^\w\s]', instr)
+
+        result_tokens = []
+        for token in tokens:
+            if token in obj:
+                result_tokens.append(obj[token])
+            elif token in all_feature_keys:
+                # It's a placeholder, but not provided — skip it
+                continue
+            else:
+                result_tokens.append(token)
+
+        # Reconstruct sentence with spacing
+        sentence = ''
+        for i, tok in enumerate(result_tokens):
+            if i > 0 and re.match(r'\w', tok) and re.match(r'\w', result_tokens[i - 1]):
+                sentence += ' '
+            sentence += tok
+
+        return sentence
+
+
 class MultitaskShapes(gym.Env):
     def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, seed:int=0):
         self.rng = np.random.default_rng(seed)
@@ -92,29 +114,6 @@ class MultitaskShapes(gym.Env):
     @property
     def agent_location(self) -> Tuple:
         return self._env.agent_location
-    
-    def _generate_instruction(self, instr: str, obj: dict, all_feature_keys: list) -> str:
-        # Split the sentence into words and punctuation
-        tokens = re.findall(r'\w+|[^\w\s]', instr)
-
-        result_tokens = []
-        for token in tokens:
-            if token in obj:
-                result_tokens.append(obj[token])
-            elif token in all_feature_keys:
-                # It's a placeholder, but not provided — skip it
-                continue
-            else:
-                result_tokens.append(token)
-
-        # Reconstruct sentence with spacing
-        sentence = ''
-        for i, tok in enumerate(result_tokens):
-            if i > 0 and re.match(r'\w', tok) and re.match(r'\w', result_tokens[i - 1]):
-                sentence += ' '
-            sentence += tok
-
-        return sentence
 
     def _sample_objects(self, candidates, n, loc_key='loc'):
         seen_locs = set()
@@ -145,7 +144,7 @@ class MultitaskShapes(gym.Env):
         objects = self._sample_objects(candidates=self._allowed_objects, n=self._num_objects)
 
         instr = self.rng.choice(self._instr_templates)
-        instr = self._generate_instruction(instr=instr, obj=objects[0], all_feature_keys=self._features.keys())
+        instr = generate_instruction(instr=instr, obj=objects[0], all_feature_keys=self._features.keys())
         
         objects[0]["is_goal"] = True
 
@@ -181,6 +180,10 @@ class ShapesMultitaskFactory(ABC):
     
     @abstractmethod
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
+        pass
+
+    @abstractmethod
+    def get_all_instructions(self) -> List[str]:
         pass
     
     def get_env(self, set_id:int) -> MultitaskShapes:
@@ -246,6 +249,21 @@ class ShapesPositionFactory(ShapesMultitaskFactory):
         holdout_candidates = [dict(zip(holdout_features.keys(), values)) for values in product(*holdout_features.values())]
 
         return train_candidates, holdout_candidates
+    
+    def get_all_instructions(self):
+        instructions = []
+        candidates = deepcopy(self._train_set)
+        candidates.extend(self._holdout_set)
+        
+        for candidate in candidates:
+            for template in self._hparams[self._hparams["task_id"]]:
+                instr = generate_instruction(
+                    instr=template, 
+                    obj=candidate, 
+                    all_feature_keys=self._hparams["features"].keys()
+                )
+                instructions.append(instr)
+        return list(set(instructions))
 
 
 # Test symbol grounding by reserving certain feature combinations
@@ -272,6 +290,7 @@ if __name__ == "__main__":
     )
 
     env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
+    instrs = env_factory.get_all_instructions()
     
     for episode in tqdm(range(10)):
         obs, _ = env.reset()
