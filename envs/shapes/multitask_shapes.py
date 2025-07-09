@@ -8,7 +8,7 @@ from gymnasium import spaces
 import random
 import re
 from copy import deepcopy
-from envs.shapes.shapes import Shapes, ShapesGoto, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
+from envs.shapes.shapes import Shapes, ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
 
 
 def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
@@ -66,7 +66,18 @@ class MultitaskShapes(gym.Env):
                 goal_channel=goal_channel
             )
         elif task_id == "go_to_easy":
-            pass
+            self._env = ShapesGotoEasy(
+                objects=self._objects,
+                grid=grid,
+                feature_order=feature_order,
+                features=features,
+                store_path=store_path,
+                max_steps=max_steps,
+                default_feature=default_feature,
+                slip_chance=slip_chance,
+                seed=seed,
+                goal_channel=goal_channel
+            )
         elif task_id == "pick_up":
             pass
         elif task_id == "retrieve":
@@ -151,11 +162,11 @@ class MultitaskShapes(gym.Env):
         return objects, instr
     
     def reset(self, seed=None):
+        self._task_num += 1
         # In easy mode only one configuration exists
         if self._task_num % self._resample_interval == 0:
             self._objects, self._instr = self._sample_task()
         
-        self._task_num += 1
         _, info = self._env.reset(seed, options={"objects": self._objects})
         return self.obs, info
     

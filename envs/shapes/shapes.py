@@ -43,24 +43,20 @@ class Shapes(gym.Env):
             0: np.array([-1, 0]), # up
             1: np.array([1, 0]),  # down
             2: np.array([0, -1]), # left
-            3: np.array([0, 1]),  # right
-            4: np.array([0, 0]), # pick up item
-            5: np.array([0, 0]) # drop item
+            3: np.array([0, 1])  # right
         }
 
         self._action_to_str = {
             0: "up",
             1: "down",
             2: "left",
-            3: "right",
-            4: "pickup",
-            5: "drop"
+            3: "right"
         }
 
         self._max_steps = max_steps
         self._steps = 0
 
-        self.action_space = gym.spaces.Discrete(6)
+        self.action_space = gym.spaces.Discrete(4)
 
         # Seeding random generators for reproducibility
        
@@ -77,7 +73,7 @@ class Shapes(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-1,
             high=6,
-            shape=(self._num_channels, self._grid.shape[0], self._grid.shape[1]),
+            shape=(self._num_channels, 3, 3),
             dtype=np.int8
         )
         
@@ -136,8 +132,7 @@ class Shapes(gym.Env):
     
     @property
     def obs(self) -> gym.spaces.Box:
-        # TODO: Implement partially observable box sometime in the future
-        return self._game_map
+        return self._game_map[:, self.agent_location[0]-1:self.agent_location[0]+2, self.agent_location[1]-1:self.agent_location[1]+2]
     
     @property 
     def wall_mask(self) -> np.ndarray:
@@ -202,6 +197,9 @@ class Shapes(gym.Env):
             self._agent_location = agent_location
         assert self._grid[self._agent_location] != 'W'
         self._game_map[0, self.agent_location[0], self.agent_location[1]] = 1
+        
+        non_walls = ~np.equal(self._grid, 'W')
+        assert(sum(self._game_map[0, non_walls]) == 1)
 
     @abstractmethod
     def step(self, action):
