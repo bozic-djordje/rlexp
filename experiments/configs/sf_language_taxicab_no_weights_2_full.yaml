@@ -62,7 +62,7 @@ environment:
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   pomdp: true
-  easy_mode: false
+  easy_mode: true
   # If easy_mode is true, goto_mode is true
   goto_mode: true
   max_steps: 200
