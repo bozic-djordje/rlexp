@@ -26,7 +26,7 @@ DEFAULT_OBJECTS = [
 
 
 class Shapes(gym.Env):
-    def __init__(self, objects: List[Dict], grid: List, feature_order: List, features: Dict, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0, goal_channel:bool=False):
+    def __init__(self, objects: List[Dict], grid: List, feature_order: List, features: Dict, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0, goal_channel:bool=False, obs_type:str="box"):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         
@@ -67,16 +67,14 @@ class Shapes(gym.Env):
         # channels = (agent_present, shape_feature, colour_feature)
         # or
         # channels = (agent, goal, shape_feature, colour_feature)
+        self._obs_type = obs_type
         self._goal_channel = goal_channel
         self._first_feature_ind = 1 + int(goal_channel)
         self._num_channels = len(self._feature_order) + 1 + int(goal_channel)
-        self.observation_space = gym.spaces.Box(
-            low=-1,
-            high=6,
-            shape=(self._num_channels, 3, 3),
-            dtype=np.int8
-        )
+        self.observation_space = self._init_observation_space()
         
+        self._game_map = None
+        self._game_vec = None
         self._goal_location = None
         self._agent_location = None
         self._agent_orientation = None
@@ -102,10 +100,16 @@ class Shapes(gym.Env):
         game_map = np.zeros((self._num_channels, self._grid.shape[0], self._grid.shape[1]), dtype=np.int8)
         walls = np.equal(self._grid, 'W')
         game_map[:, walls] = -1
+
+        vec_len = len(self._objects) * (2 + len(self._feature_order)) + 2
+        vec_len += 2 if self._goal_channel else 0
+        game_vec = np.ones(vec_len, dtype=np.int8) * -1
         
         goal_location = None
         agent_location = self._init_start_location()
         game_map[0, agent_location[0], agent_location[1]] = 1
+        game_vec[0:2] = agent_location
+        vec_ind = 2
 
         obj_cpy = deepcopy(self._objects)
         for obj in obj_cpy:
@@ -114,15 +118,22 @@ class Shapes(gym.Env):
             if is_goal:
                 goal_location = loc
             
+            game_vec[vec_ind:vec_ind+2] = loc
+            vec_ind += 2
+            
             for feature, value in obj.items():
                 channel_index = self._feature_order.index(feature) + self._first_feature_ind
                 index = (channel_index,) + loc
                 game_map[index] = self._feature_map[value]
+                game_vec[vec_ind] = self._feature_map[value]
+                vec_ind += 1
 
         if self._goal_channel:
             game_map[1, goal_location[0], goal_location[1]] = 1
+            game_vec[-2:] = loc
         
-        return game_map, goal_location, agent_location
+        assert not np.any(game_vec == -1)
+        return game_map, game_vec, goal_location, agent_location
     
     def _init_start_location(self):
         empty_locations = np.where(self._grid == ' ')
@@ -130,9 +141,34 @@ class Shapes(gym.Env):
         loc = self.rng.choice(candidates)
         return tuple(loc)
     
+    def _init_observation_space(self) -> gym.spaces.Space:
+        if self._obs_type == "vec":
+            vec_len = len(self._objects) * (2 + len(self._feature_order)) + 2
+            vec_len += 2 if self._goal_channel else 0
+            # [agent_x, agent_y, obj_1_x, obj_1_y, obj_1_feature_1, obj_1_feature_2, ..., <goal_x>, <goal_y>]
+            obs_space = gym.spaces.MultiDiscrete([10] * vec_len)
+        elif self._obs_type == "box":
+            obs_space = gym.spaces.Box(
+                low=-1,
+                high=6,
+                shape=(self._num_channels, 3, 3),
+                dtype=np.int8
+            )
+        else:
+            raise ValueError(f"Obs type must be either vec or box. Unrecognised type {self._obs_type}.")
+
+        return obs_space
+    
     @property
     def obs(self) -> gym.spaces.Box:
-        return self._game_map[:, self.agent_location[0]-1:self.agent_location[0]+2, self.agent_location[1]-1:self.agent_location[1]+2]
+        if self._obs_type == "vec":
+            obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
+            obs[0:2] = self.agent_location
+            obs[2:] = self._game_vec[2:]
+        else:
+            obs = self._game_map[:, self.agent_location[0]-1:self.agent_location[0]+2, 
+                                 self.agent_location[1]-1:self.agent_location[1]+2]
+        return obs
     
     @property 
     def wall_mask(self) -> np.ndarray:
@@ -157,7 +193,7 @@ class Shapes(gym.Env):
         if objects is not None:
             self._objects = objects
         
-        self._game_map, self._goal_location, self._agent_location = self._init_game_map()
+        self._game_map, self._game_vec, self._goal_location, self._agent_location = self._init_game_map()
         self._agent_orientation = 3
    
         assert self._grid[self._agent_location] != 'W'
@@ -398,7 +434,8 @@ if __name__ == '__main__':
         feature_order=feature_order,
         features=features,
         store_path=store_path,
-        goal_channel=False
+        goal_channel=True,
+        obs_type="vec"
     )
     env.store_frame()
     

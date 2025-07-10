@@ -36,7 +36,7 @@ def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, seed:int=0):
+    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, obs_type:str="box", seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._num_objects = num_objects
@@ -63,7 +63,8 @@ class MultitaskShapes(gym.Env):
                 default_feature=default_feature,
                 slip_chance=slip_chance,
                 seed=seed,
-                goal_channel=goal_channel
+                goal_channel=goal_channel,
+                obs_type=obs_type
             )
         elif task_id == "go_to_easy":
             self._env = ShapesGotoEasy(
@@ -76,7 +77,8 @@ class MultitaskShapes(gym.Env):
                 default_feature=default_feature,
                 slip_chance=slip_chance,
                 seed=seed,
-                goal_channel=goal_channel
+                goal_channel=goal_channel,
+                obs_type=obs_type
             )
         elif task_id == "pick_up":
             pass
@@ -127,6 +129,7 @@ class MultitaskShapes(gym.Env):
         return self._env.agent_location
 
     def _sample_objects(self, candidates, n, loc_key='loc'):
+        # TODO: Fix this so there can be no two objects that share the same feature in easy modes! (see notebook)
         seen_locs = set()
         seen_others = set()
         sampled = []
@@ -227,6 +230,7 @@ class ShapesMultitaskFactory(ABC):
                 max_steps=self._hparams["max_steps"], 
                 slip_chance=self._hparams["slip_chance"], 
                 goal_channel=self._hparams["goal_channel"], 
+                obs_type=self._hparams["obs_type"],
                 seed=self._hparams["seed"]
             )
         return env 

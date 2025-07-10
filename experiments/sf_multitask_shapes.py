@@ -13,7 +13,7 @@ from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, SaveHo
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
-from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, ConvMultiHead, FCTrunk
+from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
 
 
 def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> float:
@@ -75,16 +75,16 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
             beta=exp_hparams["priority_beta_start"]
         )
     
-    phi_nn = ConvMultiHead(
-        in_channels=train_env.observation_space["features"].shape[0],
-        in_dim=train_env.observation_space["features"].shape[1:],
+    phi_nn = FCTree(
+        in_dim=train_env.observation_space["features"].shape,
         num_heads=train_env.action_space.n,
-        h=exp_hparams["phi_nn_dim"],
+        h_trunk=exp_hparams["phi_trunk_dim"],
+        h_head=exp_hparams["phi_head_dim"],
         device=device
     )
 
     psi_nn = FCTrunk(
-        in_dim=exp_hparams["phi_nn_dim"][-1] if isinstance(exp_hparams["phi_nn_dim"], list) else exp_hparams["phi_nn_dim"],
+        in_dim=exp_hparams["phi_head_dim"][-1] if isinstance(exp_hparams["phi_head_dim"], list) else exp_hparams["phi_head_dim"],
         h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
         device=device
     )
@@ -128,7 +128,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     n_steps = exp_hparams["epoch_steps"]
     
     hooks = CompositeHook(agent=agent, logger=logger, hooks=[])
-    epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger)
+    epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger, is_linear=exp_hparams["linear_schedule"])
     hooks.add_hook(epoch_hook)
 
     if exp_hparams["prioritised_replay"]:

@@ -81,6 +81,7 @@ logs/
 __init__.py
 *.trash
 *artefacts
+*archived
 *key_exp
 notes*
 misc*

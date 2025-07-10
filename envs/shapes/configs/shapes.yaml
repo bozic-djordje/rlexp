@@ -11,6 +11,7 @@ grid:
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
 goal_channel: false
+obs_type: vec
 num_objects: 2
 resample_episodes: 1
 max_steps: 200
