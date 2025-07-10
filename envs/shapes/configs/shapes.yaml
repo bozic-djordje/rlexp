@@ -31,6 +31,9 @@ task_id: go_to
 go_to:
   - Go to colour shape.
 
+go_to_easy:
+  - Go to colour shape.
+
 pick_up:
   - Pick up goal_formulation.
 
