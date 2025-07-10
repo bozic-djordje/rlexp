@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -139,17 +139,54 @@ class FCTrunk(nn.Module):
         return self.nnet(x)
     
 
+class ConvTrunk(nn.Module):
+    def __init__(self, in_channels:int=3, in_dim:Tuple=(6, 8), h:int=64, device:torch.device=torch.device("cpu")):
+        super(ConvTrunk, self).__init__()
+        self.device = device
+        height, width = in_dim
+        self.conv_net = nn.Sequential(
+            nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
+            # (16, H, W)
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            # (32, H, W)
+            nn.ReLU(),
+            nn.Flatten(),
+            # (32*H*W,)
+            nn.Linear(32 * height * width, h, dtype=torch.float32),
+            # (hidden_dim,)
+            nn.ReLU()
+        )
+        self.to(self.device)
+
+    def forward(self, x):
+        # shape: (B, C, H, W)
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        else:
+            x = x.type(torch.float32).to(self.device)
+        x = x.type(torch.float32).to(self.device)  
+        return self.conv_net(x)
+
+
 class FCMultiHead(nn.Module):
-    def __init__(self, in_dim:int, num_heads:int, h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
+    def __init__(self, in_dim:Union[int, Tuple], num_heads:int, h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
         super(FCMultiHead, self).__init__()
         self.num_heads = num_heads
-        self.in_dim = in_dim
         self.device = device
+
+        # Handle multidimensional input
+        if isinstance(in_dim, tuple) or isinstance(in_dim, list):
+            self.flatten_input = True
+            self.flat_in_dim = int(torch.tensor(in_dim).prod().item())
+        else:
+            self.flatten_input = False
+            self.flat_in_dim = in_dim
 
         self.action_heads = []
         for _ in range(num_heads):
             modules = [
-                nn.Linear(self.in_dim, h[0], dtype=torch.float32),
+                nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32),
                 nn.ReLU()
             ]
             for i in range(1, len(h)):
@@ -167,58 +204,126 @@ class FCMultiHead(nn.Module):
             x = torch.tensor(x, dtype=torch.float32).to(self.device)
         else:
             x = x.type(torch.float32).to(self.device)
+        
+        if self.flatten_input:
+            x = x.view(x.size(0), -1)
+        
         # Compute each head's output and stack along head dimension
         head_outs = [head(x).unsqueeze(1) for head in self.action_heads]
+        return torch.cat(head_outs, dim=1)
+    
+
+class ConvMultiHead(nn.Module):
+    def __init__(self, in_channels:int=3, in_dim:Tuple=(6, 8), num_heads:int=4, h:int=64, device:torch.device=torch.device("cpu")):
+        super(ConvMultiHead, self).__init__()
+        self.device = device
+        self.num_heads = num_heads
+
+        self.trunk = ConvTrunk(in_channels=in_channels, in_dim=in_dim, h=h, device=device)
+
+        self.action_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(h, h, dtype=torch.float32),
+                nn.ReLU()
+            ) for _ in range(num_heads)
+        ])
+
+        self.to(self.device)
+
+    def forward(self, x):
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        else:
+            x = x.type(torch.float32).to(self.device)
+        shared_features = self.trunk(x)
+
+        # Compute each head's output and stack along head dimension
+        head_outs = [head(shared_features).unsqueeze(1) for head in self.action_heads]
         return torch.cat(head_outs, dim=1)
 
 
 class FCActionValue(nn.Module):
-    def __init__(self, in_dim, num_actions, h:Tuple=(16), embed_in: int=None, embed_dim:int=32):
+    def __init__(self, in_channels:int=3, num_actions:int=4, h:Tuple[int]=(768,), in_dim:Tuple[int, int]=(10,10), device:torch.device=torch.device("cpu")):
         super(FCActionValue, self).__init__()
+        self.device = device
         self.num_actions = num_actions
+        H, W = in_dim
 
-        # If the input dimension is 1 (meaning we get state id)
-        # we first embed that id
-        self.use_embed = in_dim == 1
-        if self.use_embed:
-            if embed_in is None:
-                raise ValueError(
-                    "When in_dim == 1 you must supply embed_in "
-                    "(e.g. 500 for Taxi‑v3)."
-                )
-            embed = nn.Embedding(embed_in, embed_dim)
-            self.in_dim = embed_dim
-            modules = [embed]
-        else:
-            self.in_dim = in_dim
-            modules = []
+        flat_input_dim = in_channels * H * W
+
+        layers = []
 
         if len(h) == 0:
-            modules.extend([
-                nn.Linear(self.in_dim, num_actions, dtype=torch.float32),
-                nn.ReLU()
+            layers.extend([
+                nn.Linear(flat_input_dim, num_actions, dtype=torch.float32),
+                nn.LeakyReLU(negative_slope=0.1)
             ])
         else:
-            modules.extend([
-                nn.Linear(self.in_dim, h[0], dtype=torch.float32),
-                nn.ReLU()
-            ])
-            for i in range(0, len(h)-1):
-                modules.append(nn.Linear(h[i], h[i+1], dtype=torch.float32))
-                modules.append(nn.ReLU())
-            modules.append(nn.Linear(h[-1], self.num_actions, dtype=torch.float32))
+            layers.append(nn.Linear(flat_input_dim, h[0], dtype=torch.float32))
+            layers.append(nn.LeakyReLU(negative_slope=0.1))
+            for i in range(len(h) - 1):
+                layers.append(nn.Linear(h[i], h[i + 1], dtype=torch.float32))
+                layers.append(nn.LeakyReLU(negative_slope=0.1))
+            layers.append(nn.Linear(h[-1], num_actions, dtype=torch.float32))
 
-        self.nnet = nn.Sequential(*modules)
-    
+        self.model = nn.Sequential(*layers)
+        self.to(self.device)
+
     def forward(self, x, state=None, info={}):
-
+        x = x.features
         if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x, dtype=torch.float)
-        if self.use_embed:
-            x = x.long().view(-1)
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
         else:
-            x = x.float().view(x.size(0), -1)
-        return self.nnet(x), state
+            x = x.to(self.device)
+
+        x = x.view(x.size(0), -1)  # Flatten from (B, C, H, W) to (B, C*H*W)
+        q_values = self.model(x)
+        return q_values, state
+
+
+class ConvActionValue(nn.Module):
+    def __init__(self, in_channels:int=3, num_actions:int=4, h:Tuple[int]=(768,), in_dim:Tuple[int, int]=(10, 10), device:torch.device=torch.device("cpu")):
+        super(ConvActionValue, self).__init__()
+        self.device = device
+        self.num_actions = num_actions
+        H, W = in_dim
+        flat_dim = 4 * H * W
+
+        self.conv_net = nn.Sequential(
+            nn.Conv2d(in_channels, flat_dim, kernel_size=3, stride=1, padding=0),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Flatten(),
+        )
+
+        linear_layers = []
+
+        if len(h) == 0:
+            linear_layers.extend([
+                nn.Linear(flat_dim, num_actions, dtype=torch.float32),
+                nn.LeakyReLU(negative_slope=0.1),
+            ])
+        else:
+            linear_layers.append(nn.Linear(flat_dim, h[0], dtype=torch.float32))
+            linear_layers.append(nn.LeakyReLU(negative_slope=0.1),)
+            for i in range(len(h) - 1):
+                linear_layers.append(nn.Linear(h[i], h[i+1], dtype=torch.float32))
+                linear_layers.append(nn.LeakyReLU(negative_slope=0.1),)
+            linear_layers.append(nn.Linear(h[-1], num_actions, dtype=torch.float32))
+
+        self.head = nn.Sequential(*linear_layers)
+        self.to(self.device)
+
+    def forward(self, x, state=None, info={}):
+        x = x.features
+        if not isinstance(x, torch.Tensor):
+            x = torch.tensor(x, dtype=torch.float32).to(self.device)
+        else:
+            x = x.to(self.device)
+        x = x.float()  # (B, 3, H, W)
+        x = self.conv_net(x)  # shared spatial processing
+        q_values = self.head(x)  # final action scores
+        return q_values, state
+
     
 class ConcatActionValue(FCActionValue):
     def __init__(self, in_dim, num_actions, precom_embeddings:Dict, h:Tuple=(16), embed_in: int=None, embed_dim:int=32, device:torch.device=torch.device("cpu")):
