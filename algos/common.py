@@ -126,20 +126,25 @@ class CompositeHook(EpochHook):
 
 
 class EpsilonDecayHook(EpochHook):
-    def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger):
+    def __init__(self, hparams: Dict, max_steps: int, agent: BasePolicy, logger: TensorboardLogger, is_linear=False):
         super().__init__(agent, logger)
 
         self.eps_start = hparams["epsilon_start"]
         self.eps_end = hparams["epsilon_end"]
         decay_fraction = hparams["epsilon_fraction"]
         self.decay_steps = int(max_steps * decay_fraction)
+        self.is_linear = is_linear
 
-        delta = 1e-3
-        self.k = -math.log(delta / (self.eps_start - self.eps_end)) / self.decay_steps
+        if not self.is_linear:
+            delta = 1e-3
+            self.k = -math.log(delta / (self.eps_start - self.eps_end)) / self.decay_steps
 
     def hook(self, epoch: int, global_step: int):
         if global_step <= self.decay_steps:
-            epsilon = self.eps_end + (self.eps_start - self.eps_end) * math.exp(-self.k * global_step)
+            if self.is_linear:
+                epsilon = self.eps_start - (self.eps_start - self.eps_end) * (global_step / self.decay_steps)
+            else:
+                epsilon = self.eps_end + (self.eps_start - self.eps_end) * math.exp(-self.k * global_step)
         else:
             epsilon = self.eps_end
 

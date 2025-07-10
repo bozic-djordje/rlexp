@@ -251,40 +251,23 @@ class ConvMultiHead(nn.Module):
         # Compute each head's output and stack along head dimension
         head_outs = [head(shared_features).unsqueeze(1) for head in self.action_heads]
         return torch.cat(head_outs, dim=1)
-    
+
 
 class FCTree(nn.Module):
-    def __init__(
-        self,
-        in_dim: Union[int, Tuple],
-        num_heads: int,
-        h_trunk: Tuple[int] = (128,),
-        h_head: Tuple[int] = (64,),
-        trunk: Optional[nn.Module] = None,
-        multihead: Optional[nn.Module] = None,
-        device: torch.device = torch.device("cpu")
-    ):
+    def __init__(self, in_dim:Union[int,Tuple], num_heads:int, h_trunk: Tuple[int] = (128,), h_head: Tuple[int] = (64,), device: torch.device = torch.device("cpu")):
         super(FCTree, self).__init__()
         self.device = device
 
-        # Create trunk if not provided
-        if trunk is None:
-            self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, device=device)
-            trunk_output_dim = h_trunk[-1] if len(h_trunk) > 0 else in_dim
-        else:
-            self.trunk = trunk
-            trunk_output_dim = trunk.nnet[-1].out_features  # infer output dim
+        self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, device=device)
+        # The trunk output size is the last hidden dim
+        trunk_output_dim = h_trunk[-1] if len(h_trunk) > 0 else in_dim
 
-        # Create multi-head if not provided
-        if multihead is None:
-            self.multihead = FCMultiHead(
-                in_dim=trunk_output_dim,
-                num_heads=num_heads,
-                h=h_head,
-                device=device
-            )
-        else:
-            self.multihead = multihead
+        self.multihead = FCMultiHead(
+            in_dim=trunk_output_dim,
+            num_heads=num_heads,
+            h=h_head,
+            device=device
+        )
 
         self.to(self.device)
 
