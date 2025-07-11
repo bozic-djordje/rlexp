@@ -10,7 +10,7 @@ experiment:
   # [0, 7, 8, 11]
   bert_layer_index: 0
   n_trials: 60
-  n_epochs: 3000
+  n_epochs: 2000
   # Number of update steps in epoch
   epoch_steps: 1000
   warmup_steps: 2000

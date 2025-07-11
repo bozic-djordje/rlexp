@@ -55,6 +55,7 @@ environment:
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   goal_channel: true
   num_objects: 2
+  obs_type: vec
   disc_fact: 0.99 #gamma
   resample_episodes: 1000000000
   max_steps: 100
@@ -62,7 +63,7 @@ environment:
   seed: 1
 
   # use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
-  use_features: [shape]
+  use_features: [colour]
   features:
     # circle, triangle, square, diamond, star, key
     shape: [ball, triangle, square, diamond, star, key]

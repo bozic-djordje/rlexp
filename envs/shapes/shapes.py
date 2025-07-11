@@ -130,7 +130,7 @@ class Shapes(gym.Env):
 
         if self._goal_channel:
             game_map[1, goal_location[0], goal_location[1]] = 1
-            game_vec[-2:] = loc
+            game_vec[-2:] = goal_location
         
         assert not np.any(game_vec == -1)
         return game_map, game_vec, goal_location, agent_location
