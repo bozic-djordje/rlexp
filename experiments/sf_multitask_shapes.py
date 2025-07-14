@@ -1,5 +1,5 @@
-from copy import deepcopy
 import os
+import numpy as np
 import torch
 import optuna, pickle
 
@@ -7,6 +7,7 @@ from tianshou.data import Collector, ReplayBuffer, PrioritizedReplayBuffer
 from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
+from torch.utils.tensorboard.summary import hparams
 
 from algos.sf_bert import SFBert
 from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, SaveHook
@@ -23,8 +24,10 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
 
     # We may perform a search on experiment hyper-parameters using Optuna
     exp_hparams = hparams["experiment"]
+    exp_hparams["resample_episodes"] = hparams["environment"]["resample_episodes"]
+    
     if trial is not None:
-        exp_hparams = sample_hyperparams(trial=trial, hparams=exp_hparams)
+        exp_hparams, only_sampled_hparams = sample_hyperparams(trial=trial, hparams=exp_hparams)
     # Environment hyper-parameters are fixed
     env_hparams = hparams["environment"] if "environment" in hparams else hparams
     seed = hparams["general"]["seed"]
@@ -49,7 +52,11 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         store_path=store_path
     )
     train_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
-    test_env: MultitaskShapes = env_factory.get_env(set_id='HOLDOUT')
+    
+    # TODO: Measure success on holdout later, for now success is measured on TRAIN (we are not measuring generalisation)
+    test_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
+    # TODO: Change this hack to always resample episodes when doing evaluation!
+    test_env._resample_interval = 1
     
     all_instructions = env_factory.get_all_instructions()
 
@@ -122,7 +129,11 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     )
 
     train_collector = Collector(agent, train_env, rb, exploration_noise=True)
+    train_collector.reset()
+    train_collector.collect(n_step=exp_hparams["warmup_steps"], random=True)
+
     test_collector = Collector(agent, test_env, exploration_noise=True)
+    test_rewards_history = []
     
     n_epochs = exp_hparams["n_epochs"]
     n_steps = exp_hparams["epoch_steps"]
@@ -144,20 +155,41 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         hooks.add_hook(beta_anneal_hook)
 
     save_hook = SaveHook(save_path=f'{store_path}/best_model.pth')
+
+    # TODO: Change this into a hook!
+    def custom_test_fn(epoch, global_step):
+        agent.set_eps(exp_hparams["test_epsilon"])
+        result = test_collector.collect(n_episode=exp_hparams["episode_per_test"])
+        mean_return = result.returns.mean()
+        test_rewards_history.append(mean_return)
     
-    result = OffpolicyTrainer(
+    _ = OffpolicyTrainer(
         policy=agent,
         train_collector=train_collector,
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=exp_hparams["step_per_collect"],
         update_per_step=exp_hparams["update_per_step"], episode_per_test=exp_hparams["episode_per_test"], batch_size=exp_hparams["batch_size"],
         train_fn=hooks.hook,
-        test_fn=lambda epoch, global_step: agent.set_eps(exp_hparams["test_epsilon"]),
+        test_fn=custom_test_fn,
         save_best_fn=save_hook.hook,
         logger=logger
     ).run()
     torch.save(agent.state_dict(), f'{store_path}/last_model.pth')
-    return result.best_reward
+
+    if len(test_rewards_history) < 10:
+        best_10_consec_avg = np.mean(test_rewards_history)
+    else:
+        cumsum = np.cumsum([0] + test_rewards_history)
+        best_10_consec_avg = max((cumsum[i + 10] - cumsum[i]) / 10 for i in range(len(test_rewards_history) - 9))
+    
+    if trial is not None:
+        writer.add_hparams(
+            hparam_dict=only_sampled_hparams,
+            metric_dict={
+                "train/best_result": best_10_consec_avg
+            }
+        )
+    return best_10_consec_avg
 
 
 if __name__ == '__main__':

@@ -59,6 +59,7 @@ def sample_hyperparams(trial:optuna.trial.Trial, hparams: Dict) -> Dict:
     hparams.pop("float_keys")
     log_domain_keys = set(hparams["log_domain_keys"])
     hparams.pop("log_domain_keys")
+    sampled_hparams = {}
 
     for key, val in hparams.items():
         # Fixed hyper-parameter
@@ -72,8 +73,15 @@ def sample_hyperparams(trial:optuna.trial.Trial, hparams: Dict) -> Dict:
             # Categorical hyper-parameter
             else:
                 sampled_val = trial.suggest_categorical(key, hparams[key])
+            
             opt_hparams[key] = sampled_val
-    return opt_hparams
+            if isinstance(sampled_val, list):
+                str_repr = ""
+                for val in sampled_val:
+                    str_repr += f"{val}, "
+                sampled_val = f"[{str_repr[:-2]}]"
+            sampled_hparams[key] = sampled_val
+    return opt_hparams, sampled_hparams
 
 def load_and_resize_png(path:str, cell_size:int, keep_alpha:bool=False) -> np.ndarray:
     """
