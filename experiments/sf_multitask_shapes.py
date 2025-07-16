@@ -24,12 +24,15 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
 
     # We may perform a search on experiment hyper-parameters using Optuna
     exp_hparams = hparams["experiment"]
+    # TODO: Make this less hacky! 1/2
     exp_hparams["resample_episodes"] = hparams["environment"]["resample_episodes"]
     
     if trial is not None:
         exp_hparams, only_sampled_hparams = sample_hyperparams(trial=trial, hparams=exp_hparams)
     # Environment hyper-parameters are fixed
     env_hparams = hparams["environment"] if "environment" in hparams else hparams
+    # TODO: Make this less hacky! 2/2
+    env_hparams["resample_episodes"] = exp_hparams["resample_episodes"]
     seed = hparams["general"]["seed"]
     
     sampled_config = {
