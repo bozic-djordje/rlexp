@@ -28,6 +28,40 @@ def setup_artefact_paths(script_path:str, config_name:str=None):
         os.mkdir(store_path)
     return store_path, yaml_path
 
+def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
+    
+    script_dir = os.path.dirname(script_path)
+    store_path = os.path.join(script_dir, 'artefacts')
+
+    if run_path is None:
+        experiments_root = store_path.replace("evals", "experiments")
+        candidate_path: str | None = None
+
+        # breadth‑first search limited to depth ≤ 2
+        for root, dirs, _ in os.walk(experiments_root, topdown=True):
+            rel_depth = 0 if root == experiments_root else os.path.relpath(root, experiments_root).count(os.sep) + 1
+            if rel_depth > 2:
+                # prevent os.walk from descending any deeper
+                dirs.clear()
+                continue
+
+            if os.path.basename(root) == run_id:
+                candidate_path = root
+                break
+
+        run_path = candidate_path or os.path.join(experiments_root, run_id)
+
+    model_path = os.path.join(run_path, "best_model.pth")
+    precomp_path = os.path.join(os.path.dirname(run_path), "precomputed")
+    
+    if run_id is None:
+        run_id = os.path.basename(run_path)
+    config_path = os.path.join(run_path, f"{run_id[:-16]}.yaml")
+    
+    if not os.path.isdir(store_path):
+        os.mkdir(store_path)
+    return store_path, model_path, config_path, precomp_path
+
 def setup_experiment(store_path:str, config_path:str):
     experiment_name = os.path.basename(config_path).split(".")[0]
     experiment_name = f'{experiment_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
