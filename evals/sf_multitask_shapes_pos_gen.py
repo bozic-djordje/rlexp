@@ -153,7 +153,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_mdp_slow_update_hard_20250715_163200",
+        default="sf_multitask_shapes_mdp_slow_update_hard_20250717_051721",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
