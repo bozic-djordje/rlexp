@@ -8,7 +8,7 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.sf_bert import SFBert
+from algos.sf_multitask import SFBase
 from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, SaveHook
 from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
@@ -103,7 +103,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     else:
         dec_nn = None
     
-    agent = SFBert(
+    agent = SFBase(
         phi_nn=phi_nn, 
         psi_nn=psi_nn,
         dec_nn=dec_nn,

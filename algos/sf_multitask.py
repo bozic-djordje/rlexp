@@ -1,33 +1,107 @@
+import time
 from copy import deepcopy
 from collections import Counter
 from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from typing import Any, Dict, Optional
+from typing import Dict, List, Optional, Tuple
 from tianshou.data.buffer.base import Batch
-from tianshou.data import ReplayBuffer, PrioritizedReplayBuffer
+from tianshou.data import ReplayBuffer
 from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from torch.distributions import Categorical
+from tianshou.utils.torch_utils import torch_train_mode
 from algos.common import BetaAnnealHook, CompositeHook, argmax_random_tiebreak
+from algos.common import GroupedReplayBuffer
+
 
 @dataclass
-class SFBertTrainingStats(TrainingStats):
+class SFBaseTrainingStats(TrainingStats):
     psi_td_loss: float = 0.0
     phi_l2_loss: float = 0.0
     rec_loss: float = 0.0
     epsilon: float = 0.0
     terminal_freq: float = 0.0
 
+# TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
+# current parameters of the closest model we currently have?
+class MultiparamModule:
+    def __init__(self, base_module: nn.Module, num_modules: int, lr: float):
+        self.num_modules = num_modules
+        self._counters: List[int] = [0 for _ in range(num_modules)]
 
-class SFBert(BasePolicy):
+        self._modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
+        self._t_modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
+
+        for index, m in enumerate(self._t_modules):
+            m.load_state_dict(self._modules[index].state_dict())
+            for p in m.parameters():
+                p.requires_grad = False
+            m.eval()
+
+        self._optims = [torch.optim.Adam(m.parameters(), lr=lr) for m in self._modules]
+        
+        self._key_map = {}
+        self._keys = set({})
+    
+    def _check_add_key(self, key:str) -> None:
+        if key in self._keys:
+            return
+        
+        key_index = len(self._keys)
+        self._keys.add(key)
+        self._key_map[key] = key_index
+        
+    def get_module(self, key:str, target=False) -> nn.Module:
+        self._check_add_key(key=key)
+        if target:
+            return self._t_modules[self._key_map[key]]
+        else:
+            return self._modules[self._key_map[key]]
+    
+    def get_optim(self, key:str) -> torch.optim.Optimizer:
+        self._check_add_key(key=key)
+        return self._optims[self._key_map[key]]
+    
+    def get_counter(self, key:str) -> int:
+        self._check_add_key(key=key)
+        return self._counters[self._key_map[key]]
+    
+    def update_counter(self, key:str) -> int:
+        self._check_add_key(key=key)
+        self._counters[self._key_map[key]] += 1
+    
+    def sync_module_weights(self, key:str) -> None:
+        t_module = self.get_module(key=key, target=True)
+        module = self.get_module(key=key, target=False)
+        t_module.load_state_dict(module.state_dict())
+
+    def forward(self, x: torch.Tensor, state: Dict=None, **kwargs):
+        if "key" in state:
+            module = self.get_module(key=state["key"])
+            result = module(x, **kwargs)
+        else:
+            result = [module(x, **kwargs) for module in self._modules]
+        return result
+    
+    def target(self, x: torch.Tensor, state: Dict=None, **kwargs):
+        if "key" in state:
+            module = self.get_module(key=state["key"], target=True)
+            result = module(x, **kwargs)
+        else:
+            result = [module(x, **kwargs) for module in self._t_modules]
+        return result
+    
+
+class SFBase(BasePolicy):
     def __init__(
             self, 
             phi_nn:torch.nn.Module, 
             psi_nn:torch.nn.Module, 
             precomp_embeddings:Dict,
             rb:ReplayBuffer,
+            num_skills,
             action_space, 
             lr:float, 
             target_update_freq:int, 
@@ -49,17 +123,16 @@ class SFBert(BasePolicy):
         # Psi(s,a) and Phi(s) share the same base. To obtain Psi(s,*) call phi_s = Phi(s) first
         # and then call Psi(phi_s). This gives Psi(s,a) for all a.
         self.phi_nn: nn.Module = phi_nn
-        self.psi_nn: nn.Module = psi_nn
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
-        self.psi_optim = torch.optim.Adam(self.psi_nn.parameters(), lr=self.lr)
-
-        self.psi_nn_t: nn.Module = deepcopy(psi_nn)
-        for p in self.psi_nn_t.parameters():
-            p.requires_grad = False
-        self.psi_nn_t.eval()
-        self.sync_weight()
+        
+        self.psi_nn: MultiparamModule = MultiparamModule(
+            base_module=psi_nn, 
+            num_modules=num_skills, 
+            lr=self.lr
+        )
         
         self.update_phi = True
+        self.current_w = None
         
         self.dec_nn = dec_nn
         if self.dec_nn is not None:
@@ -97,36 +170,78 @@ class SFBert(BasePolicy):
         """Set the eps for epsilon-greedy exploration."""
         self.eps = eps
 
-    def sync_weight(self) -> None:
-        """Synchronize the weight for the target network."""
-        self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
+    # def sync_weight(self) -> None:
+    #     """Synchronize the weight for the target network."""
+    #     self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
     
     def instr_to_embedding(self, instrs) -> torch.Tensor:
         w = torch.stack(
                 [self.precomp_embed[instr] for instr in instrs]
             ).to(self.device)
         return w
+    
+    @staticmethod
+    def embedding_to_key(embedding: torch.Tensor) -> Tuple:
+        return tuple(embedding.detach().tolist())
 
     def forward(self, batch, state=None, **kwargs):
+        """Does a forward pass with the agent on a batch of observations. 
+        Cannot assume all observations share the same instruction. 
+        In most cases receives batch of size 1.
+
+        Args:
+            batch (tiansou.data.Batch): Batch of observations.
+            state (_type_, optional): Additional info. Defaults to None.
+
+        Returns:
+            tianshou.data.Batch: Batch of actions.
+        """
+    
         with torch.no_grad():
             numerical_features = batch.obs.features
             # Retrieve embeddings for instructions
             w = self.instr_to_embedding(instrs=batch.obs.instr)
+
+            parse_batched = False
+            if len(batch) == 1 or (w == w[0]).all().item():
+                parse_batched = True
             
             # shape: (batch_dim, num_actions, embedding_dim)
             phi_sa = self.phi_nn(numerical_features)
             _, num_actions, _ = phi_sa.shape
 
-            phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
-            psi_a = [self.psi_nn(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_a]
+            # If a single-element batch or all elements are the same, 
+            # we can save on some costly operations by processing it at once
+            if parse_batched:
+                phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+                st = {"key": self.embedding_to_key(w[0])}
+                psi_a = [self.psi_nn.forward(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_a]
+            else:
+                # If elements belong to different instructions, we need to use different parameterisations for psi network. 
+                # This means we need to parse each element separately, hence the loop below.
+                psi_a = []
+                for index in range(len(batch)):
+                    transition = batch[index]
+                    key = self.embedding_to_key(w[index])
+                    st = {"key": key}
+                    # transition shape: (1, num_actions, embedding_dim)
+                    # shape: [(1, 1, embedding_dim), ...]
+                    phi_a_single = torch.chunk(transition, chunks=num_actions, dim=1)
+                    psi_a_single = [self.psi_nn.forward(chunk.squeeze(0).squeeze(0), st).unsqueeze(0).unsqueeze(0)
+                                     for chunk in phi_a_single]
+                    psi_a_single = torch.cat(psi_a_single, dim=0)
+                    psi_a.append(psi_a_single)
+            
             # shape: (batch_dim, num_actions, embedding_dim)
             psi = torch.cat(psi_a, dim=1)
+            # TODO: Double check if this will work.
+            self.current_w = str(w[0]).item()
             
             # shape: (batch_dim, num_actions)
             q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
             dist = Categorical(logits=q_logits)
             act = argmax_random_tiebreak(q_logits)
-            # act = dist.sample()
+            act = dist.sample()
         return Batch(act=act, state=state, dist=dist)
     
     def psi_update(self, batch: Batch) -> float:
@@ -143,6 +258,8 @@ class SFBert(BasePolicy):
 
         # Get the active instruction when the transition was played
         w = self.instr_to_embedding(instrs=batch.obs.instr)
+        key = self.embedding_to_key(embedding=w[0])
+        st = {"key": key}
         
         # Get phi(s,a) for each action a \in A for a given state s
         with torch.no_grad():
@@ -152,7 +269,7 @@ class SFBert(BasePolicy):
         
         # Run each phi_sa through the psi network individually to obtain successor features
         phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
-        psi_a = [self.psi_nn(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_a]
+        psi_a = [self.psi_nn.forward(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_a]
         # shape: (batch_dim, num_actions, embedding_dim)
         psis = torch.cat(psi_a, dim=1)
         
@@ -165,7 +282,7 @@ class SFBert(BasePolicy):
             
             phi_sa_next = self.phi_nn(batch.obs_next.features)
             phi_next_a = torch.chunk(phi_sa_next, chunks=num_actions, dim=1)
-            psis_next = [self.psi_nn_t(chunk.squeeze(1)).unsqueeze(1) for chunk in phi_next_a]
+            psis_next = [self.psi_nn.target(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_next_a]
             psis_next = torch.cat(psis_next, dim=1)
             
             qs_next = torch.bmm(psis_next, w.unsqueeze(2)).squeeze(2)
@@ -250,29 +367,57 @@ class SFBert(BasePolicy):
             self.dec_optim.step()
         
         return reward_loss.detach().item(), rec_loss.detach().item()
+    
+    def update(self, sample_size, buffer: GroupedReplayBuffer, **kwargs):
+        start_time = time.time()
+       
+        phi_batch, phi_indices = buffer.sample(sample_size)
+        phi_batch = self.process_fn(phi_batch, buffer, phi_indices)
 
-    def learn(self, batch, **kwargs):
+        # All samples in a batch need to have the same instruction
+        # so they could be processed as a batch
+        psi_batch, psi_indices = buffer.sample_group(
+            group_id=self.current_w, 
+            batch_size=sample_size
+        )
+        psi_batch = self.process_fn(psi_batch, buffer, psi_indices)
+        self.updating = True
+        
+        with torch_train_mode(self):
+            training_stat = self.learn(phi_batch, psi_batch, **kwargs)
+        
+        self.post_process_fn(phi_batch, buffer, phi_indices)
+        self.post_process_fn(psi_batch, buffer, psi_indices)
+        
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
+        self.updating = False
+        
+        training_stat.train_time = time.time() - start_time
+        
+        return training_stat
+
+    def learn(self, phi_batch, psi_batch, **kwargs):
         # Increment the iteration counter
         self.update_count += 1
+        self.psi_nn.update_counter(key=self.current_w)
         
         # Update the target network if needed
-        if self.update_count % self.target_update_freq == 0:
-            self.sync_weight()
+        if self.psi_nn.get_counter(key=self.current_w) % self.target_update_freq == 0:
+            self.psi_nn.sync_module_weights(key=self.current_w)
         
-        if self.update_count % self.cycle_update_freq == 0:
-            self.update_phi = not self.update_phi
+        # Cyclical optimisation adapted for our needs
+        # We update both phi and psi, but using different batches. 
+        # This is equivalent to alternating optimisation with interval = 1
+        self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
+        td_error = self.psi_update(batch=psi_batch)
+        self.psi_td_loss = td_error.mean()
         
-        # Cyclical optimisation as recommended in the paper
-        # Algorithm 1 does not suggest this though
-        if self.update_phi:
-            self.phi_l2_loss, self.rec_loss = self.phi_update(batch=batch)
-        else:
-            td_error = self.psi_update(batch=batch)
-            self.psi_td_loss = td_error.mean()
-            if hasattr(batch, "weight"):
-                self.rb.update_weight(index=batch.indices, new_weight=td_error)
+        # TODO: Prioritised replay not supported yet
+        # if hasattr(phi_batch, "weight"):
+        #     self.rb.update_weight(index=phi_batch.indices, new_weight=td_error)
         
-        stats = SFBertTrainingStats()
+        stats = SFBaseTrainingStats()
         stats.epsilon = self.eps
         stats.phi_l2_loss = self.phi_l2_loss
         stats.psi_td_loss = self.psi_td_loss
@@ -305,9 +450,8 @@ if __name__ == '__main__':
     from torch.utils.tensorboard import SummaryWriter
     from tianshou.utils import TensorboardLogger
     from tianshou.data import Collector, ReplayBuffer
-    from tianshou.trainer import OffpolicyTrainer
-    from algos.common import EpsilonDecayHook, SaveHook
-    from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactory
+    from algos.common import EpsilonDecayHook, SaveHook, SFTrainer, GroupedReplayBuffer
+    from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
     from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
     
     script_path = os.path.abspath(__file__)
@@ -326,12 +470,13 @@ if __name__ == '__main__':
     writer = SummaryWriter(store_path)
     logger = TensorboardLogger(writer)
 
-    env_factory = LanguageTaxicabFactory(
+    env_factory = ShapesPositionFactory(
         hparams=env_hparams, 
         store_path=store_path
     )
-    train_env: LanguageTaxicab = env_factory.get_env(set_id='TRAIN')
-    test_env: LanguageTaxicab = env_factory.get_env(set_id='HOLDOUT')
+    train_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
+    # TODO: Measure success on holdout later, for now success is measured on TRAIN (we are not measuring generalisation)
+    test_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN', purpose='EVAL')
     
     all_instructions = env_factory.get_all_instructions()
 
@@ -350,14 +495,7 @@ if __name__ == '__main__':
     
     in_dim = train_env.observation_space["features"].shape[0] + layer_embeddings[next(iter(layer_embeddings))].shape[0]
     
-    if exp_hparams['prioritised_replay'] is False:
-        rb = ReplayBuffer(size=exp_hparams['buffer_size'])
-    else:
-        rb = PrioritizedReplayBuffer(
-            size=exp_hparams['buffer_size'], 
-            alpha=exp_hparams["priority_alpha"], 
-            beta=exp_hparams["priority_beta_start"]
-        )
+    rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
 
     phi_nn = FCMultiHead(
         in_dim=train_env.observation_space["features"].shape[0],
@@ -387,7 +525,7 @@ if __name__ == '__main__':
     else:
         dec_nn = None
     
-    agent = SFBert(
+    agent = SFBase(
         phi_nn=phi_nn, 
         psi_nn=psi_nn,
         dec_nn=dec_nn,
@@ -426,7 +564,7 @@ if __name__ == '__main__':
         hooks.add_hook(beta_anneal_hook)
     save_hook_factory = SaveHook(save_path=f'{store_path}/best_model.pth')
     
-    result = OffpolicyTrainer(
+    result = SFTrainer(
         policy=agent,
         train_collector=train_collector,
         test_collector=test_collector,

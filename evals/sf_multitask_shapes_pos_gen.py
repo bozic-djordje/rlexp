@@ -7,7 +7,7 @@ from tianshou.data import Collector, ReplayBuffer, PrioritizedReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.sf_bert import SFBert
+from algos.sf_multitask import SFBase
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
 from utils import setup_eval_paths, setup_experiment
 from yaml_utils import load_yaml
@@ -19,7 +19,7 @@ from algos.nets import (
 )
 
 
-def evaluate_single_seed(*, agent: SFBert, env_hparams: dict, store_path: str, seed: int, n_episode:int=100) -> float:
+def evaluate_single_seed(*, agent: SFBase, env_hparams: dict, store_path: str, seed: int, n_episode:int=100) -> float:
 
     env_hparams_seeded = copy.deepcopy(env_hparams)
     env_hparams_seeded["seed"] = seed
@@ -94,7 +94,7 @@ def evaluation(store_path:str, model_path:str, config_path:str, precomp_path:str
     else:
         rb = ReplayBuffer(size=exp_hparams["buffer_size"])
 
-    agent = SFBert(
+    agent = SFBase(
         phi_nn=phi_nn,
         psi_nn=psi_nn,
         dec_nn=None,
@@ -153,7 +153,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_mdp_slow_update_hard_20250715_163200",
+        default="sf_multitask_shapes_mdp_slow_update_hard_20250717_051721",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(

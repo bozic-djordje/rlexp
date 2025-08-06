@@ -127,6 +127,9 @@ class MultitaskShapes(gym.Env):
     @property
     def agent_location(self) -> Tuple:
         return self._env.agent_location
+    
+    def set_resample_interval(self, interval:int) -> None:
+        self._resample_interval = interval
 
     def _sample_objects(self, candidates, n, loc_key='loc'):
         # TODO: Fix this so there can be no two objects that share the same feature in easy modes! (see notebook)
@@ -201,12 +204,12 @@ class ShapesMultitaskFactory(ABC):
     def get_all_instructions(self) -> List[str]:
         pass
     
-    def get_env(self, set_id:int) -> MultitaskShapes:
+    def get_env(self, set_id:str, purpose:str='TRAIN') -> MultitaskShapes:
         """Generates MultitaskShapes environments split into train and holdout environments.
         Args:
-            set_id (int): In {'TRAIN', 'HOLDOUT', 'HARD_HOLDOUT'}. 
+            set_id (str): In {'TRAIN', 'HOLDOUT', 'HARD_HOLDOUT'}. 
             Each contains disjoint sets of certain environment properties. 
-
+            purpose (str): In {'TRAIN', 'EVAL'}.
         Returns:
             MultitaskShapes
         """
@@ -217,6 +220,12 @@ class ShapesMultitaskFactory(ABC):
         else:
             raise ValueError(f'set_id={set_id} not in [TRAIN, HOLDOUT, HARD_HOLDOUT].')
         
+        # If we are using the environment for evaluation, we want to resample tasks on every episode
+        if purpose == 'EVAL':
+            resample_interval = 1
+        else:
+            resample_interval = self._hparams["resample_episodes"]
+        
         env = MultitaskShapes(
                 allowed_objects=allowed_objects,
                 grid=self._hparams["grid"], 
@@ -225,7 +234,7 @@ class ShapesMultitaskFactory(ABC):
                 feature_order=self._hparams["use_features"], 
                 features=self._hparams["features"],
                 num_objects=self._hparams["num_objects"], 
-                resample_interval=self._hparams["resample_episodes"], 
+                resample_interval= resample_interval, 
                 store_path=self._store_path, 
                 default_feature=self._hparams["default_feature"], 
                 max_steps=self._hparams["max_steps"], 
