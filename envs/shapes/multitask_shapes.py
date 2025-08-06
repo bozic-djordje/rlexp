@@ -161,6 +161,7 @@ class MultitaskShapes(gym.Env):
         instr = generate_instruction(instr=instr, obj=objects[0], all_feature_keys=self._features.keys())
         
         objects[0]["is_goal"] = True
+        self.rng.shuffle(objects)
 
         return objects, instr
     

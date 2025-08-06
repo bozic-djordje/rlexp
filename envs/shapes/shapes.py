@@ -101,11 +101,14 @@ class Shapes(gym.Env):
         walls = np.equal(self._grid, 'W')
         game_map[:, walls] = -1
 
-        vec_len = len(self._objects) * (2 + len(self._feature_order)) + 2
-        vec_len += 2 if self._goal_channel else 0
+        num_features = len(self._feature_order)
+        vec_len = len(self._objects) * (2 + num_features) + 2
+        vec_len += num_features if self._goal_channel else 0
         game_vec = np.ones(vec_len, dtype=np.int8) * -1
         
         goal_location = None
+        goal_features = np.ones(num_features, dtype=np.int8) * -1
+        
         agent_location = self._init_start_location()
         game_map[0, agent_location[0], agent_location[1]] = 1
         game_vec[0:2] = agent_location
@@ -121,18 +124,22 @@ class Shapes(gym.Env):
             game_vec[vec_ind:vec_ind+2] = loc
             vec_ind += 2
             
-            for feature, value in obj.items():
+            for i, (feature, value) in enumerate(obj.items()):
                 channel_index = self._feature_order.index(feature) + self._first_feature_ind
                 index = (channel_index,) + loc
                 game_map[index] = self._feature_map[value]
                 game_vec[vec_ind] = self._feature_map[value]
                 vec_ind += 1
 
+                if is_goal:
+                    goal_features[i] = self._feature_map[value]
+
         if self._goal_channel:
             game_map[1, goal_location[0], goal_location[1]] = 1
-            game_vec[-2:] = goal_location
+            game_vec[-num_features:] = goal_features
         
         assert not np.any(game_vec == -1)
+        assert not np.any(goal_features == -1)
         return game_map, game_vec, goal_location, agent_location
     
     def _init_start_location(self):
