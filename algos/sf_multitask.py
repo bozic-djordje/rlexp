@@ -292,12 +292,12 @@ class SFBase(BasePolicy):
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
             psis_target = phis_selected + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
 
-        self.psi_optim.zero_grad()
+        self.psi_nn.get_optim(key=key).zero_grad()
         td_error = (psis_selected - psis_target).pow(2).sum(dim=1)
         loss = (torch.tensor(batch.weight).to(self.device) * td_error).mean() if hasattr(batch, "weight") else td_error.mean()
         loss.backward()
-        clip_grad_norm_(self.psi_nn.parameters(), max_norm=10)
-        self.psi_optim.step()
+        clip_grad_norm_(self.psi_nn.get_module(key=key).parameters(), max_norm=10)
+        self.psi_nn.get_optim(key=key).step()
         return td_error.detach().cpu().numpy()
     
     def phi_update(self, batch:Batch) -> float:
