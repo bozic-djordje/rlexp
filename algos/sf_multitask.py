@@ -132,7 +132,7 @@ class SFBase(BasePolicy):
         )
         
         self.update_phi = True
-        self.current_w = None
+        self.active_instr_id = None
         
         self.dec_nn = dec_nn
         if self.dec_nn is not None:
@@ -234,8 +234,9 @@ class SFBase(BasePolicy):
             
             # shape: (batch_dim, num_actions, embedding_dim)
             psi = torch.cat(psi_a, dim=1)
-            # TODO: Double check if this will work.
-            self.current_w = str(w[0]).item()
+            # TODO: Double check if this will work. 
+            # It assumes that forward is used only when samples are gathered.
+            self.active_instr_id = self.embedding_to_key(embedding=w[0])
             
             # shape: (batch_dim, num_actions)
             q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
@@ -244,7 +245,7 @@ class SFBase(BasePolicy):
             act = dist.sample()
         return Batch(act=act, state=state, dist=dist)
     
-    def psi_update(self, batch: Batch) -> float:
+    def psi_update(self, batch: Batch) -> Tuple[float, Tuple]:
         batch_size = len(batch)
         if not isinstance(batch.terminated, torch.Tensor):
             terminated = torch.tensor(batch.terminated, dtype=torch.int).to(self.device)
@@ -298,7 +299,7 @@ class SFBase(BasePolicy):
         loss.backward()
         clip_grad_norm_(self.psi_nn.get_module(key=key).parameters(), max_norm=10)
         self.psi_nn.get_optim(key=key).step()
-        return td_error.detach().cpu().numpy()
+        return td_error.detach().cpu().numpy(), key
     
     def phi_update(self, batch:Batch) -> float:
         batch_size = len(batch)
@@ -377,7 +378,7 @@ class SFBase(BasePolicy):
         # All samples in a batch need to have the same instruction
         # so they could be processed as a batch
         psi_batch, psi_indices = buffer.sample_group(
-            group_id=self.current_w, 
+            group_id=self.active_instr_id, 
             batch_size=sample_size
         )
         psi_batch = self.process_fn(psi_batch, buffer, psi_indices)
@@ -398,20 +399,21 @@ class SFBase(BasePolicy):
         return training_stat
 
     def learn(self, phi_batch, psi_batch, **kwargs):
-        # Increment the iteration counter
-        self.update_count += 1
-        self.psi_nn.update_counter(key=self.current_w)
-        
-        # Update the target network if needed
-        if self.psi_nn.get_counter(key=self.current_w) % self.target_update_freq == 0:
-            self.psi_nn.sync_module_weights(key=self.current_w)
         
         # Cyclical optimisation adapted for our needs
         # We update both phi and psi, but using different batches. 
         # This is equivalent to alternating optimisation with interval = 1
         self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
-        td_error = self.psi_update(batch=psi_batch)
+        td_error, instr_id = self.psi_update(batch=psi_batch)
         self.psi_td_loss = td_error.mean()
+
+        # Increment the iteration counter
+        self.update_count += 1
+        self.psi_nn.update_counter(key=instr_id)
+        
+        # Update the target network if needed
+        if self.psi_nn.get_counter(key=instr_id) % self.target_update_freq == 0:
+            self.psi_nn.sync_module_weights(key=instr_id)
         
         # TODO: Prioritised replay not supported yet
         # if hasattr(phi_batch, "weight"):
