@@ -7,34 +7,35 @@ experiment:
   # Which variables are to be interpreted as Optuna float delimiters
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
-  n_trials: 1
-  
+  # [0, 7, 8, 11]
+  bert_layer_index: 0
+  n_trials: 60
   n_epochs: 1000
   # Number of update steps in epoch
   epoch_steps: 1000
-  warmup_steps: 500
+  warmup_steps: 50000
 
   # How many steps in the environment will be called before the agent enters the update phase.
-  # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=02.5
+  # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
-  step_per_collect: 200
+  step_per_collect: 1000
   # How many updates will happen to the network per step in the environment
   # For 0.25 update happens every 4 steps
   update_per_step: 0.25
   
   # Algorithm hyper-parameters
-  # phi_nn[-1] must be the size of embeddings
-  phi_nn_dim: [256, 768]
-  psi_nn_dim: [768]
-  use_reconstruction_loss: true
-  step_size: 1e-3
-  batch_size: 64
+  phi_trunk_dim: [2048, 1024, 768]
+  phi_head_dim: [768]
+  psi_nn_dim: [768, 1024, 768]
+  use_reconstruction_loss: false
+  step_size: 1e-5
+  batch_size: 128
   l2_freq_scaling: false
-  target_update_steps: 200
-  cycle_update_steps: 20
-  episode_per_test: 1
-  
-  buffer_size: 50000
+  target_update_steps: 10
+  cycle_update_steps: 20 # TODO: Does nothing, remove!
+  episode_per_test: 50
+
+  buffer_size: 10000000
   prioritised_replay: false
   # How strongly priorities affect sampling
   priority_alpha: 0.7
@@ -49,63 +50,52 @@ experiment:
   epsilon_end: 0.05
   epsilon_fraction: 0.8
   test_epsilon: 0.05
+  linear_schedule: false
 
 # Environment hyper-parameters are fixed
 environment:
+  # 'W' - wall
+  # ' ' - empty
+  # 'T' - potential goal position in the test set (placement not allowed in training)
   grid:
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-  - ['W', 'C', ' ', ' ', 'W', ' ', ' ', ' ', 'C', 'W']
-  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', 'W', ' ', ' ', ' ', 'W', ' ', ' ', 'W']
-  - ['W', 'C', 'W', ' ', ' ', ' ', 'W', 'C', ' ', 'W']
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
-  pomdp: true
-  easy_mode: true
-  max_steps: 200
+  goal_channel: false
+  obs_type: vec
+  num_objects: 2
   disc_fact: 0.99 #gamma
-  start_pos: null
+  resample_episodes: 5
+  max_steps: 30
   slip_chance: 0
   seed: 1
-  train_test_split: 0.7
 
-  # Attributes that should be grounded.
-  # Attributes that have a direct representation
-  attribute_order: ["colour", "building"]
-  colour: [green, blue, red, yellow]
-  building: [hospital, school, library, office]
-    
-  location_formulation:
-    - colour building
-    #  - building which is colour
+  # use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
+  use_features: [shape, colour]
+  features:
+    # circle, triangle, square, diamond, star, key
+    shape: [ball, triangle, square, diamond, star, key]
+    # green, blue, red, yellow
+    colour: [red, blue, green, yellow]
 
-  passenger_formulation:
-    - passenger
-    # - client
-    # - traveler
-    # - comuter
+  task_names: [go_to, go_to_easy, pick_up, retrieve]
+  task_id: go_to
 
-  drive_formulation:
-    - go
-    # - head
-    # - drive
-    # - ride
+  go_to:
+    - Go to colour shape.
 
-  goal_formulation:
-    - phrase: drive_common to location_formulation.
-      goal_first: true
-    # - phrase: passenger_reference wants to drive_common to location_formulation. they are currently at location_formulation.
-    #   goal_first: true
-    # - phrase: passenger_reference is waiting at location_formulation. drive_common them to location_formulation.
-    #   goal_first: false
-    # - phrase: a ride was requested to location_formulation. the pickup location is at location_formulation.
-    #   goal_first: true
+  go_to_easy:
+    - Go to colour shape.
 
-  default_feature: "0" 
+  pick_up:
+    - Pick up goal_formulation.
 
-  # 8 combinations total with green hospital being fixed
-  # green hospitals must not exist in the train or test sets
-  hard_test_attributes:
-    colour: null
-    building: null
+  retrieve:
+    - Retrieve goal_formulation.
+
+  default_feature: "0"

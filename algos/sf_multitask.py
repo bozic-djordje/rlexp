@@ -1,21 +1,22 @@
 import time
 from copy import deepcopy
+import numpy as np
 from collections import Counter
 from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from tianshou.data.buffer.base import Batch
 from tianshou.data import ReplayBuffer
 from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from torch.distributions import Categorical
 from tianshou.utils.torch_utils import torch_train_mode
-from algos.common import BetaAnnealHook, CompositeHook, argmax_random_tiebreak
-from algos.common import GroupedReplayBuffer
+from algos.common import argmax_random_tiebreak, GroupedReplayBuffer
 
 
+# TODO: Implement separate logging for separate psi losses. Implement smoothed psi loss as average of all losses!
 @dataclass
 class SFBaseTrainingStats(TrainingStats):
     psi_td_loss: float = 0.0
@@ -63,6 +64,14 @@ class MultiparamModule:
     def get_optim(self, key:str) -> torch.optim.Optimizer:
         self._check_add_key(key=key)
         return self._optims[self._key_map[key]]
+    
+    @property
+    def counter(self):
+        return self._counters
+    
+    @property
+    def keys(self):
+        return self._keys
     
     def get_counter(self, key:str) -> int:
         self._check_add_key(key=key)
@@ -132,7 +141,6 @@ class SFBase(BasePolicy):
         )
         
         self.update_phi = True
-        self.active_instr_id = None
         
         self.dec_nn = dec_nn
         if self.dec_nn is not None:
@@ -169,20 +177,12 @@ class SFBase(BasePolicy):
     def set_eps(self, eps: float) -> None:
         """Set the eps for epsilon-greedy exploration."""
         self.eps = eps
-
-    # def sync_weight(self) -> None:
-    #     """Synchronize the weight for the target network."""
-    #     self.psi_nn_t.load_state_dict(self.psi_nn.state_dict())
     
     def instr_to_embedding(self, instrs) -> torch.Tensor:
         w = torch.stack(
                 [self.precomp_embed[instr] for instr in instrs]
             ).to(self.device)
         return w
-    
-    @staticmethod
-    def embedding_to_key(embedding: torch.Tensor) -> Tuple:
-        return tuple(embedding.detach().tolist())
 
     def forward(self, batch, state=None, **kwargs):
         """Does a forward pass with the agent on a batch of observations. 
@@ -214,7 +214,7 @@ class SFBase(BasePolicy):
             # we can save on some costly operations by processing it at once
             if parse_batched:
                 phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
-                st = {"key": self.embedding_to_key(w[0])}
+                st = {"key": str(batch.obs.instr[0])}
                 psi_a = [self.psi_nn.forward(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_a]
             else:
                 # If elements belong to different instructions, we need to use different parameterisations for psi network. 
@@ -222,7 +222,7 @@ class SFBase(BasePolicy):
                 psi_a = []
                 for index in range(len(batch)):
                     transition = batch[index]
-                    key = self.embedding_to_key(w[index])
+                    key = str(batch.obs.instr[index])
                     st = {"key": key}
                     # transition shape: (1, num_actions, embedding_dim)
                     # shape: [(1, 1, embedding_dim), ...]
@@ -234,10 +234,7 @@ class SFBase(BasePolicy):
             
             # shape: (batch_dim, num_actions, embedding_dim)
             psi = torch.cat(psi_a, dim=1)
-            # TODO: Double check if this will work. 
-            # It assumes that forward is used only when samples are gathered.
-            self.active_instr_id = self.embedding_to_key(embedding=w[0])
-            
+
             # shape: (batch_dim, num_actions)
             q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
             dist = Categorical(logits=q_logits)
@@ -259,7 +256,7 @@ class SFBase(BasePolicy):
 
         # Get the active instruction when the transition was played
         w = self.instr_to_embedding(instrs=batch.obs.instr)
-        key = self.embedding_to_key(embedding=w[0])
+        key = str(batch.obs.instr[0])
         st = {"key": key}
         
         # Get phi(s,a) for each action a \in A for a given state s
@@ -376,19 +373,32 @@ class SFBase(BasePolicy):
         phi_batch = self.process_fn(phi_batch, buffer, phi_indices)
 
         # All samples in a batch need to have the same instruction
-        # so they could be processed as a batch
-        psi_batch, psi_indices = buffer.sample_group(
-            group_id=self.active_instr_id, 
-            batch_size=sample_size
-        )
-        psi_batch = self.process_fn(psi_batch, buffer, psi_indices)
+        # so they could be processed as a batch.
+        # TODO: Current code assumes a 1:1 mapping between instructions and corresponding skills. However,
+        # if we ever want to map multiple instructions to the same skill (rephrased instructions, for example)
+        # we should index replay buffer by instruction embedding not instruction id.
+        psi_batches = []
+        psi_indicess = []
+        for key in self.psi_nn.keys:
+            try:
+                psi_batch, psi_indices = buffer.sample_group(
+                    group_id=key, 
+                    batch_size=sample_size
+                )
+                psi_batch = self.process_fn(psi_batch, buffer, psi_indices)
+                psi_batches.append(psi_batch)
+                psi_indicess.append(psi_indices)
+            except ValueError:
+                pass
+
         self.updating = True
         
         with torch_train_mode(self):
-            training_stat = self.learn(phi_batch, psi_batch, **kwargs)
+            training_stat = self.learn(phi_batch, psi_batches, **kwargs)
         
         self.post_process_fn(phi_batch, buffer, phi_indices)
-        self.post_process_fn(psi_batch, buffer, psi_indices)
+        for batch, indices in zip(psi_batches, psi_indicess):
+            self.post_process_fn(batch, buffer, indices)
         
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
@@ -398,26 +408,28 @@ class SFBase(BasePolicy):
         
         return training_stat
 
-    def learn(self, phi_batch, psi_batch, **kwargs):
+    def learn(self, phi_batch, psi_batches, **kwargs):
         
         # Cyclical optimisation adapted for our needs
         # We update both phi and psi, but using different batches. 
         # This is equivalent to alternating optimisation with interval = 1
         self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
-        td_error, instr_id = self.psi_update(batch=psi_batch)
-        self.psi_td_loss = td_error.mean()
-
+        
+        td_losses = []
+        for batch in psi_batches:
+            td_error, instr_id = self.psi_update(batch=batch)
+            td_losses.append(td_error.mean())
+            self.psi_nn.update_counter(key=instr_id)
+            # print(f"{instr_id}: {self.psi_nn.get_counter(key=instr_id)}")
+            
+            # Update the target network if needed
+            if self.psi_nn.get_counter(key=instr_id) % self.target_update_freq == 0:
+                self.psi_nn.sync_module_weights(key=instr_id)
+                # print(f"Synching target network for {instr_id} skill.")
+        
+        self.psi_td_loss = np.mean(td_losses)
         # Increment the iteration counter
         self.update_count += 1
-        self.psi_nn.update_counter(key=instr_id)
-        
-        # Update the target network if needed
-        if self.psi_nn.get_counter(key=instr_id) % self.target_update_freq == 0:
-            self.psi_nn.sync_module_weights(key=instr_id)
-        
-        # TODO: Prioritised replay not supported yet
-        # if hasattr(phi_batch, "weight"):
-        #     self.rb.update_weight(index=phi_batch.indices, new_weight=td_error)
         
         stats = SFBaseTrainingStats()
         stats.epsilon = self.eps
@@ -452,9 +464,9 @@ if __name__ == '__main__':
     from torch.utils.tensorboard import SummaryWriter
     from tianshou.utils import TensorboardLogger
     from tianshou.data import Collector, ReplayBuffer
-    from algos.common import EpsilonDecayHook, SaveHook, SFTrainer, GroupedReplayBuffer
+    from algos.common import EpsilonDecayHook, SaveHook, SFTrainer, BetaAnnealHook, CompositeHook
     from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
-    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
+    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
     
     script_path = os.path.abspath(__file__)
     store_path, config_path = setup_artefact_paths(script_path=script_path)
@@ -499,16 +511,17 @@ if __name__ == '__main__':
     
     rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
 
-    phi_nn = FCMultiHead(
-        in_dim=train_env.observation_space["features"].shape[0],
+    phi_nn = FCTree(
+        in_dim=train_env.observation_space["features"].shape,
         num_heads=train_env.action_space.n,
-        h=exp_hparams["phi_nn_dim"],
+        h_trunk=exp_hparams["phi_trunk_dim"],
+        h_head=exp_hparams["phi_head_dim"],
         device=device
     )
 
     psi_nn = FCTrunk(
-        in_dim=exp_hparams["phi_nn_dim"][-1],
-        h=exp_hparams["psi_nn_dim"],
+        in_dim=exp_hparams["phi_head_dim"][-1] if isinstance(exp_hparams["phi_head_dim"], list) else exp_hparams["phi_head_dim"],
+        h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
         device=device
     )
 
@@ -532,6 +545,7 @@ if __name__ == '__main__':
         psi_nn=psi_nn,
         dec_nn=dec_nn,
         rb=rb,
+        num_skills=len(all_instructions),
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
@@ -544,6 +558,9 @@ if __name__ == '__main__':
     )
 
     train_collector = Collector(agent, train_env, rb, exploration_noise=True)
+    train_collector.reset()
+    train_collector.collect(n_step=exp_hparams["warmup_steps"], random=True)
+
     test_collector = Collector(agent, test_env, exploration_noise=True)
     
     n_epochs = exp_hparams["n_epochs"]

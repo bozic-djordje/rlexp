@@ -262,14 +262,20 @@ class GroupedReplayBuffer(ReplayBuffer):
         super().__init__(size, **kwargs)
 
         # Maps instr -> list of indices in the buffer
-        self.group_index: Dict[Any, List[int]] = defaultdict(list)
+        self.group_index: Dict[str, List[int]] = defaultdict(list)
 
         # Reverse mapping: buffer index -> instr
         self.index_to_instr: np.ndarray = np.full(size, None, dtype=object)
 
     def add(self, batch: Union[Batch, Dict[str, Any]], buffer_ids: Any = None) -> List[int]:
-        # Get indices where batch will be written
-        indices = super().add(batch, buffer_ids)
+        
+        ret = super().add(batch, buffer_ids)
+        if isinstance(ret, tuple) and len(ret) == 4:
+            indices, ep_rew, ep_len, ep_idx = ret
+            return_tuple = (ep_rew, ep_len, ep_idx)
+        else:
+            indices = ret
+            return_tuple = ()
 
         instrs = batch.obs.instr
         if isinstance(instrs, (int, str)):
@@ -292,12 +298,22 @@ class GroupedReplayBuffer(ReplayBuffer):
             self.group_index[new_instr].append(idx)
             self.index_to_instr[idx] = new_instr
 
-        return indices
+        if return_tuple:
+            return (indices, *return_tuple)
+        else:
+            return indices
     
-    def sample_group_id(self) -> Any:
+    def sample_group_id(self, sample_size:int) -> Any:
         if len(self.group_index) == 0:
             raise ValueError(f"No samples in the replay buffer.")
-        return np.random.choice(self.group_index.keys())
+        eligible_keys = [k for k, idxs in self.group_index.items() if len(idxs) > sample_size]
+        return np.random.choice(eligible_keys)
+    
+    def total_group_id(self, group_id:str) -> int:
+        if group_id in self.group_index:
+            return len(self.group_index[group_id])
+        else:
+            return 0
 
     def sample_group(self, group_id: Any, batch_size: int) -> Batch:
         """Sample transitions with obs['instr'] == instr."""
