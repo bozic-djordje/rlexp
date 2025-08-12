@@ -12,7 +12,7 @@ experiment:
   n_trials: 60
   n_epochs: 1000
   # Number of update steps in epoch
-  epoch_steps: 1000
+  epoch_steps: 1200
   warmup_steps: 50000
 
   # How many steps in the environment will be called before the agent enters the update phase.
@@ -32,7 +32,7 @@ experiment:
   batch_size: 128
   l2_freq_scaling: false
   target_update_steps: 10
-  cycle_update_steps: 20 # TODO: Does nothing, remove!
+  phi_update_freq: 0.1
   episode_per_test: 50
 
   buffer_size: 10000000

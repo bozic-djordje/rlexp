@@ -114,7 +114,7 @@ class SFBase(BasePolicy):
             action_space, 
             lr:float, 
             target_update_freq:int, 
-            cycle_update_freq:int, 
+            phi_update_freq:float, 
             l2_freq_scaling:bool, 
             gamma:float=0.99, 
             seed:float=1., 
@@ -155,7 +155,7 @@ class SFBase(BasePolicy):
             self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
 
         self.target_update_freq = target_update_freq
-        self.cycle_update_freq = cycle_update_freq
+        self.phi_update_freq = phi_update_freq
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
         self.l2_freq_scaling = l2_freq_scaling
@@ -367,10 +367,16 @@ class SFBase(BasePolicy):
         return reward_loss.detach().item(), rec_loss.detach().item()
     
     def update(self, sample_size, buffer: GroupedReplayBuffer, **kwargs):
+        # Increment the iteration counter
+        self.update_count += 1
+
         start_time = time.time()
-       
-        phi_batch, phi_indices = buffer.sample(sample_size)
-        phi_batch = self.process_fn(phi_batch, buffer, phi_indices)
+
+        if self.update_count % int(1/self.phi_update_freq) == 0:
+            phi_batch, phi_indices = buffer.sample(sample_size)
+            phi_batch = self.process_fn(phi_batch, buffer, phi_indices)
+        else:
+            phi_batch = None
 
         # All samples in a batch need to have the same instruction
         # so they could be processed as a batch.
@@ -396,7 +402,9 @@ class SFBase(BasePolicy):
         with torch_train_mode(self):
             training_stat = self.learn(phi_batch, psi_batches, **kwargs)
         
-        self.post_process_fn(phi_batch, buffer, phi_indices)
+        if phi_batch is not None:
+            self.post_process_fn(phi_batch, buffer, phi_indices)
+
         for batch, indices in zip(psi_batches, psi_indicess):
             self.post_process_fn(batch, buffer, indices)
         
@@ -410,10 +418,8 @@ class SFBase(BasePolicy):
 
     def learn(self, phi_batch, psi_batches, **kwargs):
         
-        # Cyclical optimisation adapted for our needs
-        # We update both phi and psi, but using different batches. 
-        # This is equivalent to alternating optimisation with interval = 1
-        self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
+        if phi_batch is not None:
+            self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
         
         td_losses = []
         for batch in psi_batches:
@@ -428,8 +434,6 @@ class SFBase(BasePolicy):
                 # print(f"Synching target network for {instr_id} skill.")
         
         self.psi_td_loss = np.mean(td_losses)
-        # Increment the iteration counter
-        self.update_count += 1
         
         stats = SFBaseTrainingStats()
         stats.epsilon = self.eps
@@ -551,7 +555,7 @@ if __name__ == '__main__':
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
         lr=exp_hparams["step_size"],
         target_update_freq=exp_hparams["target_update_steps"],
-        cycle_update_freq=exp_hparams["cycle_update_steps"],
+        phi_update_freq=exp_hparams["phi_update_freq"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device

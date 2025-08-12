@@ -246,10 +246,12 @@ class SFTrainer(BaseTrainer):
                 f"update_per_step={self.update_per_step}",
             )
         for _ in range(n_gradient_steps):
+            self._gradient_step += 1
             update_stat = self.policy.update(
                 sample_size=self.batch_size,
                 buffer=self.train_collector.buffer
             )
+            self._update_moving_avg_stats_and_log_update_data(update_stat)
 
             # logging
             self.policy_update_time += update_stat.train_time

@@ -125,7 +125,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
         lr=exp_hparams["step_size"],
         target_update_freq=exp_hparams["target_update_steps"],
-        cycle_update_freq=exp_hparams["cycle_update_steps"],
+        phi_update_freq=exp_hparams["cycle_update_steps"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device
