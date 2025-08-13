@@ -28,8 +28,9 @@ class SFBaseTrainingStats(TrainingStats):
 # TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
 # current parameters of the closest model we currently have?
 class MultiparamModule:
-    def __init__(self, base_module: nn.Module, num_modules: int, lr: float):
+    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, psi_update_tau:float):
         self.num_modules = num_modules
+        self.tau = psi_update_tau
         self._counters: List[int] = [0 for _ in range(num_modules)]
 
         self._modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
@@ -81,10 +82,13 @@ class MultiparamModule:
         self._check_add_key(key=key)
         self._counters[self._key_map[key]] += 1
     
-    def sync_module_weights(self, key:str) -> None:
+    def soft_update_target(self, key:str) -> None:
         t_module = self.get_module(key=key, target=True)
         module = self.get_module(key=key, target=False)
-        t_module.load_state_dict(module.state_dict())
+        
+        with torch.no_grad():
+            for p_t, p in zip(t_module.parameters(), module.parameters()):
+                p_t.data.mul_(1 - self.tau).add_(self.tau * p.data)
 
     def forward(self, x: torch.Tensor, state: Dict=None, **kwargs):
         if "key" in state:
@@ -113,8 +117,9 @@ class SFBase(BasePolicy):
             num_skills,
             action_space, 
             lr:float, 
-            target_update_freq:int, 
-            phi_update_freq:float, 
+            psi_update_tau:float,
+            phi_update_tau:float,
+            phi_update_ratio:float, 
             l2_freq_scaling:bool, 
             gamma:float=0.99, 
             seed:float=1., 
@@ -132,15 +137,20 @@ class SFBase(BasePolicy):
         # Psi(s,a) and Phi(s) share the same base. To obtain Psi(s,*) call phi_s = Phi(s) first
         # and then call Psi(phi_s). This gives Psi(s,a) for all a.
         self.phi_nn: nn.Module = phi_nn
+        self.phi_nn_t = deepcopy(self.phi_nn).to(self.device).eval()
+        for p in self.phi_nn_t.parameters(): 
+            p.requires_grad = False
         self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
+        
+        self.phi_update_tau = phi_update_tau
+        self.phi_update_freq = phi_update_ratio
         
         self.psi_nn: MultiparamModule = MultiparamModule(
             base_module=psi_nn, 
             num_modules=num_skills, 
-            lr=self.lr
+            lr=self.lr,
+            psi_update_tau=psi_update_tau
         )
-        
-        self.update_phi = True
         
         self.dec_nn = dec_nn
         if self.dec_nn is not None:
@@ -154,8 +164,7 @@ class SFBase(BasePolicy):
         for key in self.precomp_embed:
             self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
 
-        self.target_update_freq = target_update_freq
-        self.phi_update_freq = phi_update_freq
+        
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
         self.l2_freq_scaling = l2_freq_scaling
@@ -183,6 +192,11 @@ class SFBase(BasePolicy):
                 [self.precomp_embed[instr] for instr in instrs]
             ).to(self.device)
         return w
+    
+    def _soft_update_phi_target(self):
+        with torch.no_grad():
+            for p_t, p in zip(self.phi_nn_t.parameters(), self.phi_nn.parameters()):
+                p_t.data.mul_(1 - self.phi_update_tau).add_(self.phi_update_tau * p.data)
 
     def forward(self, batch, state=None, **kwargs):
         """Does a forward pass with the agent on a batch of observations. 
@@ -278,7 +292,7 @@ class SFBase(BasePolicy):
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
         with torch.no_grad():
             
-            phi_sa_next = self.phi_nn(batch.obs_next.features)
+            phi_sa_next = self.phi_nn_t(batch.obs_next.features)
             phi_next_a = torch.chunk(phi_sa_next, chunks=num_actions, dim=1)
             psis_next = [self.psi_nn.target(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_next_a]
             psis_next = torch.cat(psis_next, dim=1)
@@ -296,6 +310,7 @@ class SFBase(BasePolicy):
         loss.backward()
         clip_grad_norm_(self.psi_nn.get_module(key=key).parameters(), max_norm=10)
         self.psi_nn.get_optim(key=key).step()
+        self.psi_nn.soft_update_target(key=key)
         return td_error.detach().cpu().numpy(), key
     
     def phi_update(self, batch:Batch) -> float:
@@ -363,6 +378,7 @@ class SFBase(BasePolicy):
         self.phi_optim.step()
         if self.use_reconstruction_loss:
             self.dec_optim.step()
+        self._soft_update_phi_target()
         
         return reward_loss.detach().item(), rec_loss.detach().item()
     
@@ -426,12 +442,6 @@ class SFBase(BasePolicy):
             td_error, instr_id = self.psi_update(batch=batch)
             td_losses.append(td_error.mean())
             self.psi_nn.update_counter(key=instr_id)
-            # print(f"{instr_id}: {self.psi_nn.get_counter(key=instr_id)}")
-            
-            # Update the target network if needed
-            if self.psi_nn.get_counter(key=instr_id) % self.target_update_freq == 0:
-                self.psi_nn.sync_module_weights(key=instr_id)
-                # print(f"Synching target network for {instr_id} skill.")
         
         self.psi_td_loss = np.mean(td_losses)
         
@@ -472,6 +482,8 @@ if __name__ == '__main__':
     from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
     from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
     
+    torch.autograd.set_detect_anomaly(True)
+
     script_path = os.path.abspath(__file__)
     store_path, config_path = setup_artefact_paths(script_path=script_path)
     _, store_path, precomp_path = setup_experiment(store_path=store_path, config_path=config_path)
@@ -554,8 +566,9 @@ if __name__ == '__main__':
         precomp_embeddings=layer_embeddings,
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
         lr=exp_hparams["step_size"],
-        target_update_freq=exp_hparams["target_update_steps"],
-        phi_update_freq=exp_hparams["phi_update_freq"],
+        psi_update_tau=exp_hparams["psi_update_tau"],
+        phi_update_tau=exp_hparams["phi_update_tau"],
+        phi_update_ratio=exp_hparams["phi_update_ratio"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device

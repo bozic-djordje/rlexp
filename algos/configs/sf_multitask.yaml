@@ -10,18 +10,19 @@ experiment:
   # [0, 7, 8, 11]
   bert_layer_index: 0
   n_trials: 60
-  n_epochs: 1000
-  # Number of update steps in epoch
-  epoch_steps: 1200
+  n_epochs: 1200
+  # For simplicity, keep this equal to step_per_collect (you collect once per epoch)
+  epoch_steps: 1000
   warmup_steps: 50000
 
   # How many steps in the environment will be called before the agent enters the update phase.
   # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
   step_per_collect: 1000
-  # How many updates will happen to the network per step in the environment
-  # For 0.25 update happens every 4 steps
-  update_per_step: 0.25
+  # How many times will agen update() function be called
+  # For 0.1 there needs to be 10 steps for a full update (meaning update() is called every 10 steps). 
+  # For 1000 steps_per_collect there will be 1000/10 = 100 update() calls.
+  update_per_step: 0.1
   
   # Algorithm hyper-parameters
   phi_trunk_dim: [2048, 1024, 768]
@@ -30,10 +31,17 @@ experiment:
   use_reconstruction_loss: false
   step_size: 1e-5
   batch_size: 128
-  l2_freq_scaling: false
-  target_update_steps: 10
-  phi_update_freq: 0.1
   episode_per_test: 50
+
+  l2_freq_scaling: false
+
+  # Soft phi target network updating
+  phi_update_tau: 0.1
+  # Soft psi target network updating
+  psi_update_tau: 0.1
+  # Phi is updated more slowly than psi. For 0.25 phi will be updated on every 4th update() call. 
+  # For steps_per_collect 1000 and update_per_step 0.1, phi will be updated 100/4 = 25 times.
+  phi_update_ratio: 0.25
 
   buffer_size: 10000000
   prioritised_replay: false
