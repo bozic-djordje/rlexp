@@ -10,7 +10,7 @@ from tianshou.utils import TensorboardLogger
 from torch.utils.tensorboard.summary import hparams
 
 from algos.sf_multitask import SFBase
-from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, SaveHook
+from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, GroupedReplayBuffer, SFTrainer, SaveHook, TestFnHook
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
@@ -55,11 +55,8 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         store_path=store_path
     )
     train_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
-    
     # TODO: Measure success on holdout later, for now success is measured on TRAIN (we are not measuring generalisation)
-    test_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
-    # TODO: Change this hack to always resample episodes when doing evaluation!
-    test_env._resample_interval = 1
+    test_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN', purpose='EVAL')
     
     all_instructions = env_factory.get_all_instructions()
 
@@ -76,14 +73,8 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         bert_layer_ind = -1
     layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
     
-    if exp_hparams['prioritised_replay'] is False:
-        rb = ReplayBuffer(size=exp_hparams['buffer_size'])
-    else:
-        rb = PrioritizedReplayBuffer(
-            size=exp_hparams['buffer_size'], 
-            alpha=exp_hparams["priority_alpha"], 
-            beta=exp_hparams["priority_beta_start"]
-        )
+    # TODO: Implement PrioritisedGroupedReplayBuffer to access prioritised memory replay
+    rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
     
     phi_nn = FCTree(
         in_dim=train_env.observation_space["features"].shape,
@@ -98,34 +89,23 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
         h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
         device=device
     )
-
-    # TODO: You need to code convolutional decoder!
-    # if exp_hparams["use_reconstruction_loss"]:
-    #     # Reverse layers of the phi_nn (which acts as an encoder)
-    #     hidden_dim = deepcopy(exp_hparams["phi_nn_dim"])
-    #     hidden_dim.reverse()
-    #     in_dim = hidden_dim.pop(0)
-    #     hidden_dim.append(train_env.observation_space["features"].shape[0])
-        
-    #     dec_nn = FCTrunk(
-    #         in_dim=in_dim,
-    #         h=hidden_dim,
-    #         device=device
-    #     )
-    # else:
-    #     dec_nn = None
     
     agent = SFBase(
         phi_nn=phi_nn, 
         psi_nn=psi_nn,
         dec_nn=None,
         rb=rb,
+        num_skills=len(all_instructions),
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
-        lr=exp_hparams["step_size"],
-        psi_update_tau=exp_hparams["target_update_steps"],
-        phi_update_ratio=exp_hparams["cycle_update_steps"],
+        phi_lr=exp_hparams["phi_lr"],
+        psi_lr=exp_hparams["psi_lr"],
+        psi_lambda=exp_hparams["psi_lambda"],
+        phi_lambda=exp_hparams["phi_lambda"],
+        psi_update_tau=exp_hparams["psi_update_tau"],
+        phi_update_tau=exp_hparams["phi_update_tau"],
+        phi_update_ratio=exp_hparams["phi_update_ratio"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device
@@ -145,35 +125,24 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=n_epochs*n_steps, agent=agent, logger=logger, is_linear=exp_hparams["linear_schedule"])
     hooks.add_hook(epoch_hook)
 
-    if exp_hparams["prioritised_replay"]:
-        beta_anneal_hook = BetaAnnealHook(
-            agent=agent, 
-            buffer=rb, 
-            beta_start=exp_hparams["priority_beta_start"],
-            beta_end=exp_hparams["priority_beta_end"], 
-            frac=exp_hparams["priority_beta_frac"],
-            max_steps=n_epochs*n_steps,
-            logger=logger
-        )
-        hooks.add_hook(beta_anneal_hook)
-
     save_hook = SaveHook(save_path=f'{store_path}/best_model.pth')
-
-    # TODO: Change this into a hook!
-    def custom_test_fn(epoch, global_step):
-        agent.set_eps(exp_hparams["test_epsilon"])
-        result = test_collector.collect(n_episode=exp_hparams["episode_per_test"])
-        mean_return = result.returns.mean()
-        test_rewards_history.append(mean_return)
+    test_fn = TestFnHook(
+        agent=agent, 
+        logger=logger, 
+        epsilon=exp_hparams["test_epsilon"],
+        episodes_per_test=exp_hparams["episode_per_test"], 
+        collector=test_collector, 
+        history=test_rewards_history
+    )
     
-    _ = OffpolicyTrainer(
+    _ = SFTrainer(
         policy=agent,
         train_collector=train_collector,
         test_collector=test_collector,
         max_epoch=n_epochs, step_per_epoch=n_steps, step_per_collect=exp_hparams["step_per_collect"],
         update_per_step=exp_hparams["update_per_step"], episode_per_test=exp_hparams["episode_per_test"], batch_size=exp_hparams["batch_size"],
         train_fn=hooks.hook,
-        test_fn=custom_test_fn,
+        test_fn=test_fn.hook,
         save_best_fn=save_hook.hook,
         logger=logger
     ).run()

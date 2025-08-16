@@ -5,7 +5,7 @@ from tianshou.policy import BasePolicy
 from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from tianshou.utils import TensorboardLogger
-from tianshou.data import PrioritizedReplayBuffer, ReplayBuffer, Batch
+from tianshou.data import PrioritizedReplayBuffer, ReplayBuffer, Batch, Collector
 from collections import defaultdict
 from gymnasium import Env
 from tqdm import tqdm
@@ -170,6 +170,20 @@ class BetaAnnealHook(EpochHook):
         else:
             beta = self.b0 + (self.b1 - self.b0) * (global_step / self.anneal_steps)
         self.rb.set_beta(beta)
+
+class TestFnHook(EpochHook):
+    def __init__(self, agent: BasePolicy, logger: TensorboardLogger, epsilon: float, episodes_per_test: int, collector: Collector, history: List):
+        super().__init__(agent, logger)
+        self.epsilon = epsilon
+        self.col = collector
+        self.n_episode = episodes_per_test
+        self.history = history
+
+    def hook(self, epoch, global_step):
+        self.agent.set_eps(self.epsilon)
+        result = self.col.collect(n_episode=self.n_episode)
+        mean_return = result.returns.mean()
+        self.history.append(mean_return)
 
 
 class SaveHook:
