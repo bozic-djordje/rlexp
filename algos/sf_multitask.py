@@ -2,7 +2,7 @@ import time
 from copy import deepcopy
 import numpy as np
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
@@ -20,17 +20,20 @@ from algos.common import argmax_random_tiebreak, GroupedReplayBuffer
 @dataclass
 class SFBaseTrainingStats(TrainingStats):
     psi_td_loss: float = 0.0
+    psi_td_loss_max: float = 0.0
     phi_l2_loss: float = 0.0
     rec_loss: float = 0.0
     epsilon: float = 0.0
     terminal_freq: float = 0.0
+    norm_phi: float = 0.0
+    norm_psi: float = 0.0
 
 # TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
 # current parameters of the closest model we currently have?
 class MultiparamModule:
-    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, psi_update_tau:float):
+    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float):
         self.num_modules = num_modules
-        self.tau = psi_update_tau
+        self.tau = tau
         self._counters: List[int] = [0 for _ in range(num_modules)]
 
         self._modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
@@ -116,7 +119,10 @@ class SFBase(BasePolicy):
             rb:ReplayBuffer,
             num_skills,
             action_space, 
-            lr:float, 
+            psi_lr:float,
+            phi_lr:float,
+            psi_lambda:float,
+            phi_lambda:float,
             psi_update_tau:float,
             phi_update_tau:float,
             phi_update_ratio:float, 
@@ -130,7 +136,8 @@ class SFBase(BasePolicy):
         super().__init__(action_space=action_space)
         self.device = device
 
-        self.lr = lr
+        self.phi_lr = phi_lr
+        self.psi_lr = psi_lr
         self.gamma = gamma
         self.rb = rb
 
@@ -140,7 +147,7 @@ class SFBase(BasePolicy):
         self.phi_nn_t = deepcopy(self.phi_nn).to(self.device).eval()
         for p in self.phi_nn_t.parameters(): 
             p.requires_grad = False
-        self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.lr)
+        self.phi_optim = torch.optim.Adam(self.phi_nn.parameters(), lr=self.phi_lr)
         
         self.phi_update_tau = phi_update_tau
         self.phi_update_freq = phi_update_ratio
@@ -148,26 +155,29 @@ class SFBase(BasePolicy):
         self.psi_nn: MultiparamModule = MultiparamModule(
             base_module=psi_nn, 
             num_modules=num_skills, 
-            lr=self.lr,
-            psi_update_tau=psi_update_tau
+            lr=self.psi_lr,
+            tau=psi_update_tau
         )
         
         self.dec_nn = dec_nn
         if self.dec_nn is not None:
             self.use_reconstruction_loss = True
-            self.dec_optim = torch.optim.Adam(self.dec_nn.parameters(), lr=self.lr)
+            self.dec_optim = torch.optim.Adam(self.dec_nn.parameters(), lr=self.phi_lr)
         else:
             self.use_reconstruction_loss = False
             self.dec_optim = None
 
         self.precomp_embed = precomp_embeddings
-        for key in self.precomp_embed:
+        for key in self.precomp_embed.keys():
+            self.precomp_embed[key] = self.precomp_embed[key] / (self.precomp_embed[key].norm(p=2) + 1e-8)
             self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
-
         
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
         self.l2_freq_scaling = l2_freq_scaling
+
+        self.phi_lambda = phi_lambda
+        self.psi_lambda = psi_lambda
         
         self.phi_l2_loss = 0
         self.psi_td_loss = 0
@@ -262,6 +272,12 @@ class SFBase(BasePolicy):
             terminated = torch.tensor(batch.terminated, dtype=torch.int).to(self.device)
         else:
             terminated = batch.terminated
+        
+        if not isinstance(batch.truncated, torch.Tensor):
+            truncated = torch.tensor(batch.truncated, dtype=torch.int).to(self.device)
+        else:
+            truncated = batch.truncated
+        done = (terminated | truncated).to(torch.float32) 
 
         if not isinstance(batch.act, torch.Tensor):
             acts_selected = torch.tensor(batch.act, dtype=torch.int).to(self.device)
@@ -275,7 +291,7 @@ class SFBase(BasePolicy):
         
         # Get phi(s,a) for each action a \in A for a given state s
         with torch.no_grad():
-            phi_sa = self.phi_nn(batch.obs.features)
+            phi_sa = self.phi_nn_t(batch.obs.features)
             phis_selected = phi_sa[torch.arange(batch_size), acts_selected, :]
         _, num_actions, _ = phi_sa.shape
         
@@ -302,16 +318,34 @@ class SFBase(BasePolicy):
             psis_next_greedy = psis_next[torch.arange(batch_size), acts_greedy, :]
             
             # Get Phi(s) (equivalent to the reward in the standard Bellman update)
-            psis_target = phis_selected + (1. - terminated).unsqueeze(-1) * self.gamma * psis_next_greedy
+            psis_target = phis_selected + (1. - done).unsqueeze(-1) * self.gamma * psis_next_greedy
+        
+        # For debugging purposes
+        phi_norm = phis_selected.norm(dim=-1).mean().item()
+        psi_tgt_norm = psis_target.norm(dim=-1).mean().item()
 
+        # Huber loss
         self.psi_nn.get_optim(key=key).zero_grad()
-        td_error = (psis_selected - psis_target).pow(2).sum(dim=1)
-        loss = (torch.tensor(batch.weight).to(self.device) * td_error).mean() if hasattr(batch, "weight") else td_error.mean()
-        loss.backward()
+        huber_per_dim = nn.functional.smooth_l1_loss(psis_selected, psis_target, reduction='none')
+        td_loss_per_sample = huber_per_dim.sum(dim=1)
+        
+        if hasattr(batch, "weight"):
+            w_is = torch.as_tensor(batch.weight, device=self.device, dtype=td_loss_per_sample.dtype)
+            w_is = w_is.clamp(max=5.0) # cap PER weights
+            w_is = w_is / (w_is.mean().clamp(min=1e-8))
+            loss = (w_is * td_loss_per_sample).mean()
+        else:
+            loss = td_loss_per_sample.mean()
+        
+        # Output norm regularisation on psi
+        psi_pen = self.psi_lambda * psis_selected.pow(2).sum(-1).mean()
+        total_loss = loss + psi_pen
+        
+        total_loss.backward()
         clip_grad_norm_(self.psi_nn.get_module(key=key).parameters(), max_norm=10)
         self.psi_nn.get_optim(key=key).step()
         self.psi_nn.soft_update_target(key=key)
-        return td_error.detach().cpu().numpy(), key
+        return loss.detach().cpu().numpy(), phi_norm, psi_tgt_norm, key
     
     def phi_update(self, batch:Batch) -> float:
         batch_size = len(batch)
@@ -366,6 +400,10 @@ class SFBase(BasePolicy):
         else:
             rec_loss = torch.tensor(0., device=self.device)
             total_loss = reward_loss
+        
+        # Output norm regularisation on phi
+        phi_pen = self.phi_lambda * (phis_selected.pow(2).sum(dim=-1).mean())
+        total_loss += phi_pen
 
         total_loss.backward()
 
@@ -438,12 +476,21 @@ class SFBase(BasePolicy):
             self.phi_l2_loss, self.rec_loss = self.phi_update(batch=phi_batch)
         
         td_losses = []
+        phi_norms = []
+        psi_norms = []
+        td_loss_map = {}
+
         for batch in psi_batches:
-            td_error, instr_id = self.psi_update(batch=batch)
+            td_error, phi_norm, psi_norm, instr_id = self.psi_update(batch=batch)
             td_losses.append(td_error.mean())
+            phi_norms.append(phi_norm)
+            psi_norms.append(psi_norm)
+            td_loss_map[instr_id] = td_error
             self.psi_nn.update_counter(key=instr_id)
         
         self.psi_td_loss = np.mean(td_losses)
+        self.phi_norm = np.mean(phi_norms)
+        self.psi_norm = np.mean(psi_norms)
         
         stats = SFBaseTrainingStats()
         stats.epsilon = self.eps
@@ -451,6 +498,13 @@ class SFBase(BasePolicy):
         stats.psi_td_loss = self.psi_td_loss
         stats.terminal_freq = self.terminal_freq
         stats.rec_loss = self.rec_loss
+        # Debugging
+        stats.norm_phi = self.phi_norm
+        stats.norm_psi = self.psi_norm
+        
+        stats.psi_td_loss_max = np.amax(td_losses)
+        for k, v in td_loss_map.items():
+            setattr(stats, f"psi_td_per_instr/{k}", float(v))
 
         return stats
 
@@ -565,7 +619,10 @@ if __name__ == '__main__':
         action_space=train_env.action_space,
         precomp_embeddings=layer_embeddings,
         l2_freq_scaling=exp_hparams["l2_freq_scaling"],
-        lr=exp_hparams["step_size"],
+        phi_lr=exp_hparams["phi_lr"],
+        psi_lr=exp_hparams["psi_lr"],
+        psi_lambda=exp_hparams["psi_lambda"],
+        phi_lambda=exp_hparams["phi_lambda"],
         psi_update_tau=exp_hparams["psi_update_tau"],
         phi_update_tau=exp_hparams["phi_update_tau"],
         phi_update_ratio=exp_hparams["phi_update_ratio"],

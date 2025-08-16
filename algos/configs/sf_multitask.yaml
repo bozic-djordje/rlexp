@@ -12,26 +12,29 @@ experiment:
   n_trials: 60
   n_epochs: 1200
   # For simplicity, keep this equal to step_per_collect (you collect once per epoch)
-  epoch_steps: 1000
+  epoch_steps: 4000
   warmup_steps: 50000
 
   # How many steps in the environment will be called before the agent enters the update phase.
   # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
-  step_per_collect: 1000
+  step_per_collect: 4000
   # How many times will agen update() function be called
   # For 0.1 there needs to be 10 steps for a full update (meaning update() is called every 10 steps). 
   # For 1000 steps_per_collect there will be 1000/10 = 100 update() calls.
-  update_per_step: 0.1
+  update_per_step: 0.01
   
   # Algorithm hyper-parameters
   phi_trunk_dim: [2048, 1024, 768]
   phi_head_dim: [768]
   psi_nn_dim: [768, 1024, 768]
   use_reconstruction_loss: false
-  step_size: 1e-5
+  phi_lr: 1e-5
+  psi_lr: 1e-6
+  phi_lambda: 1e-3
+  psi_lambda: 1e-4
   batch_size: 128
-  episode_per_test: 50
+  episode_per_test: 1
 
   l2_freq_scaling: false
 
@@ -41,7 +44,7 @@ experiment:
   psi_update_tau: 0.1
   # Phi is updated more slowly than psi. For 0.25 phi will be updated on every 4th update() call. 
   # For steps_per_collect 1000 and update_per_step 0.1, phi will be updated 100/4 = 25 times.
-  phi_update_ratio: 0.25
+  phi_update_ratio: 1
 
   buffer_size: 10000000
   prioritised_replay: false
