@@ -25,7 +25,7 @@ experiment:
   update_per_step: 0.01
   
   # Algorithm hyper-parameters
-  phi_trunk_dim: [[4096, 2048, 768], [4096, 2048, 1024, 768]]
+  phi_trunk_dim: [[4096, 2048, 1024, 768]]
   phi_head_dim: [[768]]
   psi_nn_dim: [[768, 1024, 768]]
   use_reconstruction_loss: false
@@ -110,3 +110,13 @@ environment:
     - Retrieve goal_formulation.
 
   default_feature: "0"
+  
+  reserved_combinations:
+  - shape: diamond
+    colour: red
+  - shape: star
+    colour: blue
+  - shape: square
+    colour: green
+  - shape: ball
+    colour: yellow

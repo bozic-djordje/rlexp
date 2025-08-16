@@ -11,7 +11,7 @@ from torch.utils.tensorboard.summary import hparams
 
 from algos.sf_multitask import SFBase
 from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, GroupedReplayBuffer, SFTrainer, SaveHook, TestFnHook
-from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
+from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
 from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
@@ -50,7 +50,7 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     writer = SummaryWriter(store_path)
     logger = TensorboardLogger(writer)
 
-    env_factory = ShapesPositionFactory(
+    env_factory = ShapesAttrCombFactory(
         hparams=env_hparams, 
         store_path=store_path
     )

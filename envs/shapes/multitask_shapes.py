@@ -200,9 +200,20 @@ class ShapesMultitaskFactory(ABC):
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
         pass
 
-    @abstractmethod
-    def get_all_instructions(self) -> List[str]:
-        pass
+    def get_all_instructions(self):
+        instructions = []
+        candidates = deepcopy(self._train_set)
+        candidates.extend(self._holdout_set)
+        
+        for candidate in candidates:
+            for template in self._hparams[self._hparams["task_id"]]:
+                instr = generate_instruction(
+                    instr=template, 
+                    obj=candidate, 
+                    all_feature_keys=self._hparams["features"].keys()
+                )
+                instructions.append(instr)
+        return list(set(instructions))
     
     def get_env(self, set_id:str, purpose:str='TRAIN') -> MultitaskShapes:
         """Generates MultitaskShapes environments split into train and holdout environments.
@@ -274,28 +285,41 @@ class ShapesPositionFactory(ShapesMultitaskFactory):
         holdout_candidates = [dict(zip(holdout_features.keys(), values)) for values in product(*holdout_features.values())]
 
         return train_candidates, holdout_candidates
-    
-    def get_all_instructions(self):
-        instructions = []
-        candidates = deepcopy(self._train_set)
-        candidates.extend(self._holdout_set)
-        
-        for candidate in candidates:
-            for template in self._hparams[self._hparams["task_id"]]:
-                instr = generate_instruction(
-                    instr=template, 
-                    obj=candidate, 
-                    all_feature_keys=self._hparams["features"].keys()
-                )
-                instructions.append(instr)
-        return list(set(instructions))
 
 
 # Test symbol grounding by reserving certain feature combinations
 class ShapesAttrCombFactory(ShapesMultitaskFactory):
-    # TODO
+    def __init__(self, hparams, store_path):
+        self._holdout_combs = hparams["reserved_combinations"]
+        super().__init__(hparams, store_path)
+    
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
-        pass
+        grid = np.array(grid)
+        
+        positions = np.where((grid == ' ') | (grid == 'T'))
+        positions = list(zip(*positions))
+
+        use_features = set(self._hparams["use_features"])
+        train_features: Dict = deepcopy(self._hparams["features"])
+        keys_to_remove = [k for k in train_features if k not in use_features]
+        
+        for feature in keys_to_remove:
+            train_features.pop(feature)
+        
+        train_features["loc"] = positions
+        train_candidates = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
+        n_candidates = len(train_candidates)
+        
+        holdout_candidates = []
+        for candiadte in train_candidates:
+            c = deepcopy(candiadte)
+            c.pop("loc")
+            if c in self._holdout_combs:
+                holdout_candidates.append(candiadte)
+                train_candidates.remove(candiadte)
+        
+        assert(n_candidates == len(train_candidates) + len(holdout_candidates))
+        return train_candidates, holdout_candidates
 
     
 if __name__ == "__main__":
@@ -309,7 +333,7 @@ if __name__ == "__main__":
     with open(yaml_path, 'r') as file:
         hparams = yaml.safe_load(file)
 
-    env_factory = ShapesPositionFactory(
+    env_factory = ShapesAttrCombFactory(
         hparams=hparams, 
         store_path=store_path
     )
@@ -326,4 +350,4 @@ if __name__ == "__main__":
             next_obs, reward, terminated, truncated, _ = env.step(action)
             obs = next_obs
             done = terminated or truncated
-        env.store_frame(plot_name=f"final_step_multitask_{env.task_num}", use_png=True)
+        env.store_frame(plot_name=f"final_step_multitask_{env.task_num}")
