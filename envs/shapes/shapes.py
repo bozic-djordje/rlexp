@@ -381,7 +381,7 @@ class ShapesGoto(Shapes):
 
         if self._agent_location == self._goal_location:
             is_terminal = True
-            reward = 20
+            reward = 10
         elif self._agent_location in confounder_locations:
             reward = -10
         
@@ -398,7 +398,7 @@ class ShapesGotoEasy(Shapes):
 
         if self._agent_location == self._goal_location:
             is_terminal = True
-            reward = 20
+            reward = 10
         
         return obs, reward, is_terminal, truncated, info
 
