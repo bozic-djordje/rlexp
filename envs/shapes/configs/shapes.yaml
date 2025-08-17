@@ -6,7 +6,7 @@ grid:
   - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
   - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
   - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', 'A', ' ', ' ', ' ', ' ', 'W']
   - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them

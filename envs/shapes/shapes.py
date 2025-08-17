@@ -143,8 +143,11 @@ class Shapes(gym.Env):
         return game_map, game_vec, goal_location, agent_location
     
     def _init_start_location(self):
-        empty_locations = np.where(self._grid == ' ')
-        candidates = list(zip(*empty_locations))
+        specified_locs = np.where(self._grid == 'A')
+        candidates = list(zip(*specified_locs))
+        if len(candidates) == 0:
+            empty_locations = np.where(self._grid == ' ')
+            candidates = list(zip(*empty_locations))
         loc = self.rng.choice(candidates)
         return tuple(loc)
     

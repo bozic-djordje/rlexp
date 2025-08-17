@@ -296,8 +296,11 @@ class ShapesAttrCombFactory(ShapesMultitaskFactory):
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
         grid = np.array(grid)
         
-        positions = np.where((grid == ' ') | (grid == 'T'))
+        positions = np.where(grid == 'T')
         positions = list(zip(*positions))
+        if len(positions) == 0:
+            positions = np.where(grid == ' ')
+            positions = list(zip(*positions))
 
         use_features = set(self._hparams["use_features"])
         train_features: Dict = deepcopy(self._hparams["features"])
