@@ -141,11 +141,35 @@ class MultitaskShapes(gym.Env):
         seen_others = set()
         sampled = []
 
+        # Use the same shape as a goal, but resample its location
         if goal is not None:
+            # Strip goal of location and is_goal keys
+            goal_spec = deepcopy(goal)
+            goal_spec.pop(loc_key)
+            if "is_goal" in goal_spec:
+                goal_spec.pop("is_goal")
+
+            candidates_cpy = deepcopy(candidates)
+            goal_candidates = []
+            
+            cand: Dict
+            for cand in candidates_cpy:
+                # Strip each candidate of irrelevant keys
+                loc = cand.pop(loc_key)
+                if "is_goal" in cand:
+                    cand.pop("is_goal")
+                
+                if cand == goal_spec:
+                    cand[loc_key] = loc
+                    goal_candidates.append(cand)
+            
+            self.rng.shuffle(goal_candidates)
+            
+            goal = goal_candidates[0]
             sampled.append(goal)
             seen_locs.add(goal[loc_key])
-
             others = tuple(sorted((k, v) for k, v in goal.items() if k != loc_key and k != "is_goal"))
+            
             seen_others.add(others)
 
         indices = list(range(len(candidates)))
@@ -158,6 +182,10 @@ class MultitaskShapes(gym.Env):
             d = candidates[idx]
             loc = d[loc_key]
             others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key and k != "is_goal"))
+
+            # Just in case
+            if "is_goal" in d:
+                d.pop("is_goal")
 
             if loc in seen_locs or others in seen_others:
                 continue
@@ -370,7 +398,7 @@ if __name__ == "__main__":
     instrs = env_factory.get_all_instructions()
     
     for episode in tqdm(range(10)):
-        obs, _ = env.reset()
+        obs, _ = env.reset(options={"goal": DEFAULT_OBJECTS[0]})
         done = False
 
         while not done:
