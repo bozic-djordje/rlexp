@@ -387,6 +387,7 @@ class ShapesGoto(Shapes):
             reward = 10
         elif self._agent_location in confounder_locations:
             reward = -10
+            info = {"is_confounder": True}
         
         return obs, reward, is_terminal, truncated, info
     

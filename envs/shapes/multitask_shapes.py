@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from itertools import product
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import os
 import numpy as np
 import gymnasium as gym
@@ -11,14 +11,14 @@ from copy import deepcopy
 from envs.shapes.shapes import Shapes, ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
 
 
-def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
+def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
         # Split the sentence into words and punctuation
         tokens = re.findall(r'\w+|[^\w\s]', instr)
 
         result_tokens = []
         for token in tokens:
-            if token in obj:
-                result_tokens.append(obj[token])
+            if token in goal:
+                result_tokens.append(goal[token])
             elif token in all_feature_keys:
                 # It's a placeholder, but not provided — skip it
                 continue
@@ -48,6 +48,7 @@ class MultitaskShapes(gym.Env):
         self._instr_templates = instruction_templates
         
         self._objects, self._instr = self._sample_task()
+        self._goal_obj = self._objects[0]
 
         self._task_num = 0
         self._resample_interval = resample_interval
@@ -128,22 +129,35 @@ class MultitaskShapes(gym.Env):
     def agent_location(self) -> Tuple:
         return self._env.agent_location
     
+    @property
+    def goal_list(self) -> List:
+        return self._allowed_objects
+    
     def set_resample_interval(self, interval:int) -> None:
         self._resample_interval = interval
 
-    def _sample_objects(self, candidates, n, loc_key='loc'):
-        # TODO: Fix this so there can be no two objects that share the same feature in easy modes! (see notebook)
+    def _sample_objects(self, candidates, n, loc_key='loc', goal=None):
         seen_locs = set()
         seen_others = set()
         sampled = []
 
+        if goal is not None:
+            sampled.append(goal)
+            seen_locs.add(goal[loc_key])
+
+            others = tuple(sorted((k, v) for k, v in goal.items() if k != loc_key and k != "is_goal"))
+            seen_others.add(others)
+
         indices = list(range(len(candidates)))
         self.rng.shuffle(indices)
+
+        if len(sampled) == n:
+            return sampled
 
         for idx in indices:
             d = candidates[idx]
             loc = d[loc_key]
-            others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key))
+            others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key and k != "is_goal"))
 
             if loc in seen_locs or others in seen_others:
                 continue
@@ -157,22 +171,33 @@ class MultitaskShapes(gym.Env):
 
         return sampled
 
-    def _sample_task(self) -> List:
-        objects = self._sample_objects(candidates=self._allowed_objects, n=self._num_objects)
-
+    def _sample_task(self, goal:Dict=None) -> List:
+        objects = self._sample_objects(candidates=self._allowed_objects, n=self._num_objects, goal=goal)
         instr = self.rng.choice(self._instr_templates)
-        instr = generate_instruction(instr=instr, obj=objects[0], all_feature_keys=self._features.keys())
+        instr = generate_instruction(instr=instr, goal=objects[0], all_feature_keys=self._features.keys())
         
         objects[0]["is_goal"] = True
         self.rng.shuffle(objects)
 
         return objects, instr
     
-    def reset(self, seed=None):
+    def reset(self, seed=None, options: Optional[dict]={}):
         self._task_num += 1
-        # In easy mode only one configuration exists
-        if self._task_num % self._resample_interval == 0:
-            self._objects, self._instr = self._sample_task()
+        
+        # If we are passed a goal, we sample a task with that goal
+        if options:
+            self._objects, self._instr = self._sample_task(goal=options["goal"])
+            self._goal_obj = self._objects[0]
+        # Otherwise
+        else:
+            # We check if the goal itself needs to be resampled
+            if self._task_num % self._resample_interval == 0:
+                self._objects, self._instr = self._sample_task()
+                self._goal_obj = self._objects[0]
+            # Or just the confounder objects
+            else:
+                # TODO: See if to handle things like this
+                self._objects, self._instr = self._sample_task(goal=self._goal_obj)
         
         _, info = self._env.reset(seed, options={"objects": self._objects})
         return self.obs, info
@@ -209,7 +234,7 @@ class ShapesMultitaskFactory(ABC):
             for template in self._hparams[self._hparams["task_id"]]:
                 instr = generate_instruction(
                     instr=template, 
-                    obj=candidate, 
+                    goal=candidate, 
                     all_feature_keys=self._hparams["features"].keys()
                 )
                 instructions.append(instr)
