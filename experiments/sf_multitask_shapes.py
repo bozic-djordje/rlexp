@@ -182,7 +182,7 @@ if __name__ == '__main__':
     # Automatically determine if we are running a single experiment or multiple
     # If multiple, Optuna will be used.
     single_experiment = True
-    special_keys = {"phi_nn_dim", "psi_nn_dim", "float_keys", "log_domain_keys"}
+    special_keys = {"phi_nn_dim", "phi_head_dim", "phi_trunk_dim", "psi_nn_dim", "float_keys", "log_domain_keys"}
     # Multiple experiments warranted if there are hyper-parameters with multiple values
     for key, val in exp_hparams.items():
         if isinstance(val, list) and key not in special_keys:

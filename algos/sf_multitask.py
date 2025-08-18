@@ -30,22 +30,23 @@ class SFBaseTrainingStats(TrainingStats):
 
 # TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
 # current parameters of the closest model we currently have?
-class MultiparamModule:
+class MultiparamModule(nn.Module):
     def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float):
+        super(MultiparamModule, self).__init__()
         self.num_modules = num_modules
         self.tau = tau
         self._counters: List[int] = [0 for _ in range(num_modules)]
 
-        self._modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
-        self._t_modules: List[nn.Module] = [deepcopy(base_module) for _ in range(num_modules)]
+        self.nets = nn.ModuleList([deepcopy(base_module) for _ in range(num_modules)])
+        self.t_nets = nn.ModuleList([deepcopy(base_module) for _ in range(num_modules)])
 
-        for index, m in enumerate(self._t_modules):
-            m.load_state_dict(self._modules[index].state_dict())
+        for index, m in enumerate(self.t_nets):
+            m.load_state_dict(self.nets[index].state_dict())
             for p in m.parameters():
                 p.requires_grad = False
             m.eval()
 
-        self._optims = [torch.optim.Adam(m.parameters(), lr=lr) for m in self._modules]
+        self._optims = [torch.optim.Adam(m.parameters(), lr=lr) for m in self.nets]
         
         self._key_map = {}
         self._keys = set({})
@@ -61,9 +62,9 @@ class MultiparamModule:
     def get_module(self, key:str, target=False) -> nn.Module:
         self._check_add_key(key=key)
         if target:
-            return self._t_modules[self._key_map[key]]
+            return self.t_nets[self._key_map[key]]
         else:
-            return self._modules[self._key_map[key]]
+            return self.nets[self._key_map[key]]
     
     def get_optim(self, key:str) -> torch.optim.Optimizer:
         self._check_add_key(key=key)
@@ -94,19 +95,16 @@ class MultiparamModule:
                 p_t.data.mul_(1 - self.tau).add_(self.tau * p.data)
 
     def forward(self, x: torch.Tensor, state: Dict=None, **kwargs):
+        target = False
+        if "target" in state and state["target"]:
+            target = True
+            
         if "key" in state:
-            module = self.get_module(key=state["key"])
+            module = self.get_module(key=state["key"], target=target)
             result = module(x, **kwargs)
         else:
-            result = [module(x, **kwargs) for module in self._modules]
-        return result
-    
-    def target(self, x: torch.Tensor, state: Dict=None, **kwargs):
-        if "key" in state:
-            module = self.get_module(key=state["key"], target=True)
-            result = module(x, **kwargs)
-        else:
-            result = [module(x, **kwargs) for module in self._t_modules]
+            modules = self.t_nets if target else self.nets
+            result = [module(x, **kwargs) for module in modules]
         return result
     
 
@@ -307,10 +305,10 @@ class SFBase(BasePolicy):
 
         # Get the relevant Psi(s',a') vector for the greedy action a' to be played in the transition next_state. 
         with torch.no_grad():
-            
+            st_t = {"key": key, "target": True}
             phi_sa_next = self.phi_nn_t(batch.obs_next.features)
             phi_next_a = torch.chunk(phi_sa_next, chunks=num_actions, dim=1)
-            psis_next = [self.psi_nn.target(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_next_a]
+            psis_next = [self.psi_nn.forward(chunk.squeeze(1), st_t).unsqueeze(1) for chunk in phi_next_a]
             psis_next = torch.cat(psis_next, dim=1)
             
             qs_next = torch.bmm(psis_next, w.unsqueeze(2)).squeeze(2)
