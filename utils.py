@@ -28,7 +28,7 @@ def setup_artefact_paths(script_path:str, config_name:str=None):
         os.mkdir(store_path)
     return store_path, yaml_path
 
-def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
+def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None, last_model=False):
     
     script_dir = os.path.dirname(script_path)
     store_path = os.path.join(script_dir, 'artefacts')
@@ -51,7 +51,8 @@ def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
 
         run_path = candidate_path or os.path.join(experiments_root, run_id)
 
-    model_path = os.path.join(run_path, "best_model.pth")
+    model_name = "last_model.pth" if last_model else "best_model.pth"
+    model_path = os.path.join(run_path, model_name)
     precomp_path = os.path.join(os.path.dirname(run_path), "precomputed")
     
     if run_id is None:
