@@ -115,7 +115,9 @@ class Shapes(gym.Env):
         vec_ind = 2
 
         obj_cpy = deepcopy(self._objects)
-        for obj in obj_cpy:
+        sorted_objs = sorted(obj_cpy, key=lambda d: (d["loc"][0], d["loc"][1]))
+
+        for obj in sorted_objs:
             loc = obj.pop("loc")
             is_goal = obj.pop("is_goal", False)
             if is_goal:
