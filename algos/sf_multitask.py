@@ -107,6 +107,31 @@ class MultiparamModule(nn.Module):
             result = [module(x, **kwargs) for module in modules]
         return result
     
+    def get_extra_state(self) -> Dict[str, Any]:
+        """
+        Called by torch when building state_dict(); its return value is pickled
+        into state_dict under the 'extra_state' key.
+        """
+        return {
+            "keys": list(self._keys),
+            "key_map": dict(self._key_map)
+        }
+    
+    def set_extra_state(self, state: Dict[str, Any]) -> None:
+        """
+        Called by torch.load_state_dict() after tensor parameters/buffers are loaded.
+        Restore non-tensor Python state here.
+        """
+        keys = state.get("keys", [])
+        key_map = state.get("key_map", {})
+
+        if len(keys) == 0:
+            raise ValueError("Trying to load 0 skills from the checkpoint. Minimum number of skills is 1.")
+        
+        self._keys = list(keys)
+        self._key_map = dict(key_map)
+
+    
 
 class SFBase(BasePolicy):
     def __init__(
