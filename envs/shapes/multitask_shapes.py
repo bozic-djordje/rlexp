@@ -36,7 +36,7 @@ def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, obs_type:str="box", seed:int=0):
+    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, change_loc_on_fix_goal:bool=False, obs_type:str="box", seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._num_objects = num_objects
@@ -49,6 +49,7 @@ class MultitaskShapes(gym.Env):
         
         self._objects, self._instr = self._sample_task()
         self._goal_obj = self._objects[0]
+        self._change_loc = change_loc_on_fix_goal
 
         self._task_num = 0
         self._resample_interval = resample_interval
@@ -143,29 +144,31 @@ class MultitaskShapes(gym.Env):
 
         # Use the same shape as a goal, but resample its location
         if goal is not None:
-            # Strip goal of location and is_goal keys
-            goal_spec = deepcopy(goal)
-            goal_spec.pop(loc_key)
-            if "is_goal" in goal_spec:
-                goal_spec.pop("is_goal")
+            if self._change_loc:
+                # Strip goal of location and is_goal keys
+                goal_spec = deepcopy(goal)
+                goal_spec.pop(loc_key)
+                if "is_goal" in goal_spec:
+                    goal_spec.pop("is_goal")
 
-            candidates_cpy = deepcopy(candidates)
-            goal_candidates = []
-            
-            cand: Dict
-            for cand in candidates_cpy:
-                # Strip each candidate of irrelevant keys
-                loc = cand.pop(loc_key)
-                if "is_goal" in cand:
-                    cand.pop("is_goal")
+                candidates_cpy = deepcopy(candidates)
+                goal_candidates = []
                 
-                if cand == goal_spec:
-                    cand[loc_key] = loc
-                    goal_candidates.append(cand)
+                cand: Dict
+                for cand in candidates_cpy:
+                    # Strip each candidate of irrelevant keys
+                    loc = cand.pop(loc_key)
+                    if "is_goal" in cand:
+                        cand.pop("is_goal")
+                    
+                    if cand == goal_spec:
+                        cand[loc_key] = loc
+                        goal_candidates.append(cand)
+                
+                self.rng.shuffle(goal_candidates)
+                
+                goal = goal_candidates[0]
             
-            self.rng.shuffle(goal_candidates)
-            
-            goal = goal_candidates[0]
             sampled.append(goal)
             seen_locs.add(goal[loc_key])
             others = tuple(sorted((k, v) for k, v in goal.items() if k != loc_key and k != "is_goal"))
