@@ -132,25 +132,19 @@ class MultitaskShapes(gym.Env):
     
     @property
     def goal_list(self) -> List:
-        return self._allowed_objects
+        return deepcopy(self._allowed_objects)
     
     def set_resample_interval(self, interval:int) -> None:
         self._resample_interval = interval
 
-    def _sample_objects(self, candidates, n, loc_key='loc', goal=None):
+    def _sample_objects(self, candidates, n, loc_key='loc', goal:Dict=None):
         seen_locs = set()
         seen_others = set()
         sampled = []
 
         # Use the same shape as a goal, but resample its location
         if goal is not None:
-            if self._change_loc:
-                # Strip goal of location and is_goal keys
-                goal_spec = deepcopy(goal)
-                goal_spec.pop(loc_key)
-                if "is_goal" in goal_spec:
-                    goal_spec.pop("is_goal")
-
+            if loc_key not in goal:
                 candidates_cpy = deepcopy(candidates)
                 goal_candidates = []
                 
@@ -158,15 +152,12 @@ class MultitaskShapes(gym.Env):
                 for cand in candidates_cpy:
                     # Strip each candidate of irrelevant keys
                     loc = cand.pop(loc_key)
-                    if "is_goal" in cand:
-                        cand.pop("is_goal")
                     
-                    if cand == goal_spec:
+                    if cand == goal:
                         cand[loc_key] = loc
                         goal_candidates.append(cand)
                 
                 self.rng.shuffle(goal_candidates)
-                
                 goal = goal_candidates[0]
             
             sampled.append(goal)
@@ -186,10 +177,6 @@ class MultitaskShapes(gym.Env):
             loc = d[loc_key]
             others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key and k != "is_goal"))
 
-            # Just in case
-            if "is_goal" in d:
-                d.pop("is_goal")
-
             if loc in seen_locs or others in seen_others:
                 continue
 
@@ -199,11 +186,18 @@ class MultitaskShapes(gym.Env):
 
             if len(sampled) == n:
                 break
+        
+        for sample in sampled:
+            if "is_goal" in sample:
+                d.pop("is_goal")
 
-        return sampled
+        return deepcopy(sampled)
 
     def _sample_task(self, goal:Dict=None) -> List:
-        objects = self._sample_objects(candidates=self._allowed_objects, n=self._num_objects, goal=goal)
+        if goal is not None and "is_goal" in goal:
+            goal.pop("is_goal")
+        
+        objects = self._sample_objects(candidates=self.goal_list, n=self._num_objects, goal=goal)
         instr = self.rng.choice(self._instr_templates)
         instr = generate_instruction(instr=instr, goal=objects[0], all_feature_keys=self._features.keys())
         
@@ -214,21 +208,17 @@ class MultitaskShapes(gym.Env):
     
     def reset(self, seed=None, options: Optional[dict]={}):
         self._task_num += 1
-        
-        # If we are passed a goal, we sample a task with that goal
-        if options:
-            self._objects, self._instr = self._sample_task(goal=options["goal"])
-            self._goal_obj = self._objects[0]
-        # Otherwise
+        if "goal" in options:
+            goal = deepcopy(options["goal"])
+            self._objects, self._instr = self._sample_task(goal=goal)
         else:
-            # We check if the goal itself needs to be resampled
             if self._task_num % self._resample_interval == 0:
                 self._objects, self._instr = self._sample_task()
-                self._goal_obj = self._objects[0]
-            # Or just the confounder objects
             else:
-                # TODO: See if to handle things like this
-                self._objects, self._instr = self._sample_task(goal=self._goal_obj)
+                goal = deepcopy(self._objects[0])
+                if self._change_loc:
+                    goal.pop("loc")
+                self._objects, self._instr = self._sample_task(goal=goal)
         
         _, info = self._env.reset(seed, options={"objects": self._objects})
         return self.obs, info
