@@ -30,42 +30,44 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: dict, store_path: str, s
 
     skill_stats = {}
     for goal in goal_list:
-        returns = []
-        goal_first = []
-        step_nums = []
 
-        for _ in range(n_episode):
-            obs, _ = eval_env.reset(options={"goal": goal})
-            ret = 0
-            confounder_visited = 0
-            steps = 0
+        obs, _ = eval_env.reset(options={"goal": goal})
+        ret = 0
+        confounder_visited = 0
+        steps = 0
 
-            instr = obs["instr"]
-            if not instr in skill_stats:
-                skill_stats[instr] = {}
+        instr = obs["instr"]
 
-            done = False
-            while not done:
-                a_batch: Batch = agent(Batch(obs=[obs]))
-                action_id = a_batch.act.item()
-                next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
-                obs = next_obs
-                done = terminated or truncated
-                
-                ret += reward
-                steps += 1
-                if "is_confounder" in info and info["is_confounder"]:
-                    confounder_visited += 1
+        done = False
+        while not done:
+            a_batch: Batch = agent(Batch(obs=[obs]))
+            action_id = a_batch.act.item()
+            next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
+            obs = next_obs
+            done = terminated or truncated
             
-            goal_properly_reached = int(not confounder_visited) and steps < env_hparams["max_steps"]
-            
-            returns.append(ret)
-            step_nums.append(steps)
-            goal_first.append(goal_properly_reached)
+            ret += reward
+            steps += 1
+            if "is_confounder" in info and info["is_confounder"]:
+                confounder_visited += 1
         
-        skill_stats[instr]["return"] = sum(returns)/n_episode
-        skill_stats[instr]["steps"] = sum(step_nums)/n_episode
-        skill_stats[instr]["goal_first"] = sum(goal_first)/n_episode
+        goal_properly_reached = int(not confounder_visited) and steps < 15
+
+        if instr not in skill_stats:
+            skill_stats[instr] = {
+                "return": [],
+                "steps": [],
+                "goal_first": []
+            }
+        
+        skill_stats[instr]["return"].append(ret)
+        skill_stats[instr]["steps"].append(steps)
+        skill_stats[instr]["goal_first"].append(goal_properly_reached)
+    
+    for instr, stat in skill_stats.items():
+        skill_stats[instr]["return"] = np.round(np.mean(skill_stats[instr]["return"]), 2)
+        skill_stats[instr]["steps"] = np.round(np.mean(skill_stats[instr]["steps"]), 2)
+        skill_stats[instr]["goal_first"] = np.round(np.mean(skill_stats[instr]["goal_first"]), 2)
     
     return skill_stats
                 
@@ -188,7 +190,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_best_20250818_132414",
+        default="sf_multitask_shapes_best_20250819_223238",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
