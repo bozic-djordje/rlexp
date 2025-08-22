@@ -24,7 +24,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: dict, store_path: str, s
 
     env_hparams_seeded = copy.deepcopy(env_hparams)
     env_hparams_seeded["seed"] = seed
-    env_factory = ShapesPositionFactory(hparams=env_hparams_seeded, store_path=store_path)
+    env_factory = ShapesAttrCombFactory(hparams=env_hparams_seeded, store_path=store_path)
     eval_env: MultitaskShapes = env_factory.get_env(set_id="TRAIN", purpose="EVAL")
     goal_list = eval_env.goal_list
 
@@ -190,7 +190,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_best_20250819_223238",
+        default="sf_multitask_shapes_small_rb_20250821_234431",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(

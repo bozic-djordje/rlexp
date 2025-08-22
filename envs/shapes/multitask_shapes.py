@@ -343,10 +343,10 @@ class ShapesAttrCombFactory(ShapesMultitaskFactory):
         grid = np.array(grid)
         
         positions = np.where(grid == 'T')
-        positions = list(zip(*positions))
+        positions = list(zip(positions[0], positions[1]))
         if len(positions) == 0:
             positions = np.where(grid == ' ')
-            positions = list(zip(*positions))
+            positions = list(zip(positions[0], positions[1]))
 
         use_features = set(self._hparams["use_features"])
         train_features: Dict = deepcopy(self._hparams["features"])
