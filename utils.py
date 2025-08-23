@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime
 import os
 import shutil
@@ -117,6 +118,24 @@ def sample_hyperparams(trial:optuna.trial.Trial, hparams: Dict) -> Dict:
                 sampled_val = f"[{str_repr[:-2]}]"
             sampled_hparams[key] = sampled_val
     return opt_hparams, sampled_hparams
+
+
+def iterate_hyperparams(hparams: Dict, key:str) -> Dict:
+    if "float_keys" in hparams:
+        hparams.pop("float_keys")
+    
+    if "log_domain_keys" in hparams:
+        hparams.pop("log_domain_keys")
+    
+    hparams_list = []
+
+    for val in hparams[key]:
+        hp = deepcopy(hparams)
+        hp[key] = val
+        hparams_list.append(hp)
+
+    return hparams_list
+    
 
 def load_and_resize_png(path:str, cell_size:int, keep_alpha:bool=False) -> np.ndarray:
     """

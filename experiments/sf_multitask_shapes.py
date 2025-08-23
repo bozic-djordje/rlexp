@@ -7,17 +7,16 @@ from tianshou.data import Collector, ReplayBuffer, PrioritizedReplayBuffer
 from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
-from torch.utils.tensorboard.summary import hparams
 
 from algos.sf_multitask import SFBase, SFMix
 from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, GroupedReplayBuffer, SFTrainer, SaveHook, TestFnHook
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
-from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
+from utils import iterate_hyperparams, setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
 from algos.nets import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
 
 
-def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> float:
+def experiment(store_path:str, config_path:str, trial:optuna.trial.Trial=None, exact_hparams=None) -> float:
     _, store_path, precomp_path = setup_experiment(store_path=store_path, config_path=config_path)
     with open(config_path, 'r') as file:
         hparams = load_yaml(file)
@@ -29,6 +28,9 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
     
     if trial is not None:
         exp_hparams, only_sampled_hparams = sample_hyperparams(trial=trial, hparams=exp_hparams)
+    elif exact_hparams is not None:
+        exp_hparams = exact_hparams
+    
     # Environment hyper-parameters are fixed
     env_hparams = hparams["environment"] if "environment" in hparams else hparams
     # TODO: Make this less hacky! 2/2
@@ -189,6 +191,13 @@ def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> fl
                 "train/best_result": best_10_consec_avg
             }
         )
+    elif exact_hparams is not None:
+        writer.add_hparams(
+            hparam_dict=exact_hparams,
+            metric_dict={
+                "train/best_result": best_10_consec_avg
+            }
+        )
     return best_10_consec_avg
 
 
@@ -196,6 +205,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Run SF Multitask Shapes experiment.")
     parser.add_argument("--config_name", type=str, default=None, help="Experiment name which needs to match config file name.")
+    parser.add_argument("--iterate_key", type=str, default=None, help="Parameter name through which to iterate. Must be in config and must be a list.")
     args = parser.parse_args()
 
     script_path = os.path.abspath(__file__)
@@ -211,6 +221,10 @@ if __name__ == '__main__':
     # If multiple, Optuna will be used.
     single_experiment = True
     special_keys = {"phi_nn_dim", "phi_head_dim", "phi_trunk_dim", "psi_nn_dim", "float_keys", "log_domain_keys"}
+    
+    if args.iterate_key is not None:
+        special_keys.add(args.iterate_key)
+
     # Multiple experiments warranted if there are hyper-parameters with multiple values
     for key, val in exp_hparams.items():
         if isinstance(val, list) and key not in special_keys:
@@ -218,6 +232,10 @@ if __name__ == '__main__':
         
     if not single_experiment:
         import functools
+        
+        if args.iterate_key is not None:
+            raise ValueError(f"Cannot both iterate key {args.iterate_key} and run Optuna trial. Either remove --iterate_key argument, or have a single set of hyper-parameters!") 
+        
         print(f'Optuna: Running {exp_hparams["n_trials"]} experiments to determine the best set of hyper-parameters.')
         _, store_path = setup_study(store_path=store_path, config_path=config_path)
         objective = functools.partial(experiment, store_path=store_path, config_path=config_path)
@@ -233,5 +251,21 @@ if __name__ == '__main__':
         optuna_path = os.path.join(store_path, f"{config_name}.pkl")
         with open(optuna_path, "wb") as f: pickle.dump(study, f)
     else:
-        print(f'Running a single experiment.')
-        experiment(trial=None, store_path=store_path, config_path=config_path)
+        if args.iterate_key is None:
+            print(f'Running a single experiment.')
+            experiment(trial=None, store_path=store_path, config_path=config_path, exact_hparams=None)
+        else:
+            with open(config_path, 'r') as file:
+                hparams = load_yaml(file)
+            
+            exp_hparams = hparams["experiment"]
+            exp_hparams["resample_episodes"] = hparams["environment"]["resample_episodes"]
+
+            if not isinstance(exp_hparams[args.iterate_key], list):
+                raise ValueError(f"Cannot iterate key {args.iterate_key}, key value not a list!") 
+            
+            hparams_list = iterate_hyperparams(hparams=exp_hparams, key=args.iterate_key)
+            
+            print(f'Iterating over key={args.iterate_key}. Running {len(hparams_list)} experiments.')
+            for hp in hparams_list:
+                experiment(trial=None, store_path=store_path, config_path=config_path, exact_hparams=hp)
