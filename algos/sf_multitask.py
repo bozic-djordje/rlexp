@@ -697,7 +697,11 @@ if __name__ == '__main__':
         bert_layer_ind = exp_hparams["bert_layer_index"]
     else:
         bert_layer_ind = -1
-    layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
+    
+    if not isinstance(bert_layer_ind, list):
+        layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
+    else:
+        layer_embeddings = precomp_embeddings
     
     in_dim = train_env.observation_space["features"].shape[0] + layer_embeddings[next(iter(layer_embeddings))].shape[0]
     
@@ -732,26 +736,51 @@ if __name__ == '__main__':
     else:
         dec_nn = None
     
-    agent = SFBase(
-        phi_nn=phi_nn, 
-        psi_nn=psi_nn,
-        dec_nn=dec_nn,
-        rb=rb,
-        num_skills=len(all_instructions),
-        action_space=train_env.action_space,
-        precomp_embeddings=layer_embeddings,
-        l2_freq_scaling=exp_hparams["l2_freq_scaling"],
-        phi_lr=exp_hparams["phi_lr"],
-        psi_lr=exp_hparams["psi_lr"],
-        psi_lambda=exp_hparams["psi_lambda"],
-        phi_lambda=exp_hparams["phi_lambda"],
-        psi_update_tau=exp_hparams["psi_update_tau"],
-        phi_update_tau=exp_hparams["phi_update_tau"],
-        phi_update_ratio=exp_hparams["phi_update_ratio"],
-        gamma=env_hparams["disc_fact"],
-        seed=seed,
-        device=device
-    )
+    if not isinstance(bert_layer_ind, list):
+        agent = SFBase(
+            phi_nn=phi_nn, 
+            psi_nn=psi_nn,
+            dec_nn=None,
+            rb=rb,
+            num_skills=len(all_instructions),
+            action_space=train_env.action_space,
+            precomp_embeddings=layer_embeddings,
+            l2_freq_scaling=exp_hparams["l2_freq_scaling"],
+            phi_lr=exp_hparams["phi_lr"],
+            psi_lr=exp_hparams["psi_lr"],
+            psi_lambda=exp_hparams["psi_lambda"],
+            phi_lambda=exp_hparams["phi_lambda"],
+            psi_update_tau=exp_hparams["psi_update_tau"],
+            phi_update_tau=exp_hparams["phi_update_tau"],
+            phi_update_ratio=exp_hparams["phi_update_ratio"],
+            gamma=env_hparams["disc_fact"],
+            seed=seed,
+            device=device
+        )
+    else:
+        mix_nn = ScalarMix(len(bert_layer_ind), trainable=True).to(device)
+        agent = SFMix(
+            phi_nn=phi_nn, 
+            psi_nn=psi_nn,
+            mix_nn=mix_nn,
+            layers_to_mix=bert_layer_ind,
+            dec_nn=None,
+            rb=rb,
+            num_skills=len(all_instructions),
+            action_space=train_env.action_space,
+            precomp_embeddings=layer_embeddings,
+            l2_freq_scaling=exp_hparams["l2_freq_scaling"],
+            phi_lr=exp_hparams["phi_lr"],
+            psi_lr=exp_hparams["psi_lr"],
+            psi_lambda=exp_hparams["psi_lambda"],
+            phi_lambda=exp_hparams["phi_lambda"],
+            psi_update_tau=exp_hparams["psi_update_tau"],
+            phi_update_tau=exp_hparams["phi_update_tau"],
+            phi_update_ratio=exp_hparams["phi_update_ratio"],
+            gamma=env_hparams["disc_fact"],
+            seed=seed,
+            device=device
+        )
 
     train_collector = Collector(agent, train_env, rb, exploration_noise=True)
     train_collector.reset()
