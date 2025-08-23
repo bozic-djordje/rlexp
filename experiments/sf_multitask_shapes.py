@@ -257,7 +257,8 @@ if __name__ == '__main__':
         else:
             with open(config_path, 'r') as file:
                 hparams = load_yaml(file)
-            
+            _, store_path = setup_study(store_path=store_path, config_path=config_path)
+
             exp_hparams = hparams["experiment"]
             exp_hparams["resample_episodes"] = hparams["environment"]["resample_episodes"]
 
@@ -265,7 +266,6 @@ if __name__ == '__main__':
                 raise ValueError(f"Cannot iterate key {args.iterate_key}, key value not a list!") 
             
             hparams_list = iterate_hyperparams(hparams=exp_hparams, key=args.iterate_key)
-            
             print(f'Iterating over key={args.iterate_key}. Running {len(hparams_list)} experiments.')
             for hp in hparams_list:
                 experiment(trial=None, store_path=store_path, config_path=config_path, exact_hparams=hp)
