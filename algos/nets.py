@@ -88,20 +88,7 @@ class ScalarMix(torch.nn.Module):
         """
         Compute a weighted average of the `tensors`.  The input tensors an be any shape
         with at least two dimensions, but must all be the same shape.
-
-        When `do_layer_norm=True`, the `mask` is required input.  If the `tensors` are
-        dimensioned  `(dim_0, ..., dim_{n-1}, dim_n)`, then the `mask` is dimensioned
-        `(dim_0, ..., dim_{n-1})`, as in the typical case with `tensors` of shape
-        `(batch_size, timesteps, dim)` and `mask` of shape `(batch_size, timesteps)`.
-
-        When `do_layer_norm=False` the `mask` is ignored.
         """
-        if len(tensors) != self.mixture_size:
-            raise ValueError(
-                "{} tensors were passed, but the module was initialized to "
-                "mix {} tensors.".format(len(tensors), self.mixture_size)
-            )
-
         normed_weights = torch.nn.functional.softmax(
             torch.cat([parameter for parameter in self.scalar_parameters]), dim=0
         )

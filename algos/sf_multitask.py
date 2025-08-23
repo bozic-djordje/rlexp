@@ -1,5 +1,6 @@
 import time
 from copy import deepcopy
+from itertools import chain
 import numpy as np
 from collections import Counter
 from dataclasses import dataclass, field
@@ -306,14 +307,14 @@ class SFBase(BasePolicy):
             acts_selected = torch.tensor(batch.act, dtype=torch.int).to(self.device)
         else:
             acts_selected = batch.act
-
-        # Get the active instruction when the transition was played
-        w = self.instr_to_embedding(instrs=batch.obs.instr)
-        key = str(batch.obs.instr[0])
-        st = {"key": key}
         
-        # Get phi(s,a) for each action a \in A for a given state s
         with torch.no_grad():
+            # Get the active instruction when the transition was played
+            w = self.instr_to_embedding(instrs=batch.obs.instr)
+            key = str(batch.obs.instr[0])
+            st = {"key": key}
+            
+            # Get phi(s,a) for each action a \in A for a given state s
             phi_sa = self.phi_nn_t(batch.obs.features)
             phis_selected = phi_sa[torch.arange(batch_size), acts_selected, :]
         _, num_actions, _ = phi_sa.shape
@@ -546,6 +547,104 @@ class SFBase(BasePolicy):
         rand_act = rand_act.cpu().numpy()
         act[rand_mask] = rand_act[rand_mask]
         return act
+    
+
+class SFMix(SFBase):
+    """
+    SFBase with learnable scalar-mixed instruction embeddings.
+
+    IMPORTANT: Pass `precomp_embeddings` as:
+        Dict[str, List[Tensor(d,)]]
+    where each value is the list of per-layer embeddings for that instruction.
+    """
+    def __init__(
+        self,
+        phi_nn: nn.Module,
+        psi_nn: nn.Module,
+        mix_nn: nn.Module,
+        layers_to_mix: Tuple[int],
+        precomp_embeddings: Dict[str, List[torch.Tensor]],
+        rb,
+        num_skills,
+        action_space,
+        psi_lr: float,
+        phi_lr: float,
+        psi_lambda: float,
+        phi_lambda: float,
+        psi_update_tau: float,
+        phi_update_tau: float,
+        phi_update_ratio: float,
+        l2_freq_scaling: bool,
+        gamma:float=0.99,
+        seed:float=1.0,
+        terminal_rew:float=20,
+        renorm_w:bool=False,
+        dec_nn:Optional[nn.Module]=None,
+        device:torch.device=torch.device("cpu"),
+    ):
+        # Call SFBase as-is. It will store precomp_embeddings on self.precomp_embed,
+        # but we will not use SFBase's value-normalization; we override instr_to_embedding.
+        super().__init__(
+            phi_nn=phi_nn,
+            psi_nn=psi_nn,
+            precomp_embeddings=precomp_embeddings,
+            rb=rb,
+            num_skills=num_skills,
+            action_space=action_space,
+            psi_lr=psi_lr,
+            phi_lr=phi_lr,
+            psi_lambda=psi_lambda,
+            phi_lambda=phi_lambda,
+            psi_update_tau=psi_update_tau,
+            phi_update_tau=phi_update_tau,
+            phi_update_ratio=phi_update_ratio,
+            l2_freq_scaling=l2_freq_scaling,
+            gamma=gamma,
+            seed=seed,
+            terminal_rew=terminal_rew,
+            dec_nn=dec_nn,
+            device=device,
+        )
+        self.mix_nn: ScalarMix = mix_nn
+        self._layers_to_mix = tuple(layers_to_mix)
+        self._renorm_w = renorm_w
+        
+        self._precomp_embed_per_layer: Dict[str, List[torch.Tensor]] = {}
+        
+        mat: torch.Tensor
+        for instr, mat in self.precomp_embed.items():
+            mat = mat.to(self.device)
+            selected: List[torch.Tensor] = []
+            for li in self._layers_to_mix:
+                v = mat[li]  # (d,)
+                v = v / (v.norm(p=2) + 1e-8)
+                selected.append(v)
+            self._precomp_embed_per_layer[str(instr)] = selected
+        
+        del self.phi_optim
+        self.phi_optim = torch.optim.Adam(
+            chain(self.phi_nn.parameters(), self.mix_nn.parameters()),
+            lr=self.phi_lr,
+        )
+
+    def instr_to_embedding(self, instrs) -> torch.Tensor:
+        # Build list of layer-batch tensors: [E^l1, E^l2, ...], each of shape (B, d)
+        layer_batches: List[torch.Tensor] = []
+
+        # Pre-collect layer vectors for all instructions to keep order consistent
+        # For layer k (in 0..K-1), stack over batch
+        for k in range(len(self._layers_to_mix)):
+            layer_k_batch = torch.stack(
+                [self._precomp_embed_per_layer[str(instr)][k] for instr in instrs], dim=0  # (B, d)
+            )
+            layer_batches.append(layer_k_batch)
+
+        # Differentiable mixture via provided mix_nn (assumed ScalarMix-like)
+        w = self.mix_nn(layer_batches)  # (B, d)
+
+        if self._renorm_w:
+            w = w / (w.norm(p=2, dim=-1, keepdim=True) + 1e-8)
+        return w
 
 
 if __name__ == '__main__':
@@ -557,7 +656,7 @@ if __name__ == '__main__':
     from tianshou.data import Collector, ReplayBuffer
     from algos.common import EpsilonDecayHook, SaveHook, SFTrainer, BetaAnnealHook, CompositeHook
     from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
-    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
+    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree, ScalarMix
     
     torch.autograd.set_detect_anomaly(True)
 
