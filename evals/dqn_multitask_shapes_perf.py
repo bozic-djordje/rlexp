@@ -3,7 +3,8 @@ import copy
 import numpy as np
 import torch
 
-from tianshou.data import Batch
+from tianshou.data import Batch, ReplayBuffer
+from tianshou.policy import DQNPolicy
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
@@ -13,6 +14,7 @@ from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory,
 from utils import setup_eval_paths, setup_experiment
 from yaml_utils import load_yaml
 from algos.nets import (
+    ConcatActionValue,
     precompute_bert_embeddings,
     extract_bert_layer_embeddings,
     FCTrunk,
@@ -40,7 +42,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: dict, store_path: str, s
 
         done = False
         while not done:
-            a_batch: Batch = agent(Batch(obs=[obs]))
+            a_batch: Batch = agent(Batch(obs=[obs], info=[]))
             action_id = a_batch.act.item()
             next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
             obs = next_obs
@@ -96,43 +98,28 @@ def evaluation(store_path:str, model_path:str, config_path:str, precomp_path:str
     env_factory = ShapesAttrCombFactory(hparams=env_hparams, store_path=store_path)
     dummy_env = env_factory.get_env(set_id="TRAIN", purpose="EVAL")
     all_instructions = env_factory.get_all_instructions()
+    
+    emb_dim = layer_embeddings[next(iter(layer_embeddings))].shape[0]
+    feat_dim = dummy_env.observation_space["features"].shape[0]
+    in_dim = feat_dim + emb_dim
 
-    phi_nn = FCTree(
-        in_dim=dummy_env.observation_space["features"].shape,
-        num_heads=dummy_env.action_space.n,
-        h_trunk=exp_hparams["phi_trunk_dim"],
-        h_head=exp_hparams["phi_head_dim"],
+    nnet = ConcatActionValue(
+        in_dim=in_dim,
+        num_actions=int(dummy_env.action_space.n),
+        h=exp_hparams["hidden_dim"],
+        precom_embeddings=layer_embeddings,
         device=device
     )
+    optim = torch.optim.Adam(nnet.parameters(), lr=exp_hparams["lr"])
+    rb = ReplayBuffer(size=exp_hparams['buffer_size'])
 
-    psi_nn = FCTrunk(
-        in_dim=exp_hparams["phi_head_dim"][-1] if isinstance(exp_hparams["phi_head_dim"], list) else exp_hparams["phi_head_dim"],
-        h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
-        device=device
-    )
-    
-    # TODO: Implement PrioritisedGroupedReplayBuffer to access prioritised memory replay
-    rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
-    
-    agent = SFBase(
-        phi_nn=phi_nn, 
-        psi_nn=psi_nn,
-        dec_nn=None,
-        rb=rb,
-        num_skills=len(all_instructions),
+    agent = DQNPolicy(
+        model=nnet,
+        optim=optim,
+        is_double=False,
         action_space=dummy_env.action_space,
-        precomp_embeddings=layer_embeddings,
-        l2_freq_scaling=exp_hparams["l2_freq_scaling"],
-        phi_lr=exp_hparams["phi_lr"],
-        psi_lr=exp_hparams["psi_lr"],
-        psi_lambda=exp_hparams["psi_lambda"],
-        phi_lambda=exp_hparams["phi_lambda"],
-        psi_update_tau=exp_hparams["psi_update_tau"],
-        phi_update_tau=exp_hparams["phi_update_tau"],
-        phi_update_ratio=exp_hparams["phi_update_ratio"],
-        gamma=env_hparams["disc_fact"],
-        seed=base_seed,
-        device=device
+        discount_factor=env_hparams["disc_fact"],
+        target_update_freq=exp_hparams["target_update_steps"]
     )
     agent.load_state_dict(torch.load(model_path, map_location=device))
     agent.eval()
@@ -190,7 +177,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_small_2_20250822_134452",
+        default="dqn_multitask_shapes_20250825_093038",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(

@@ -191,13 +191,6 @@ def experiment(store_path:str, config_path:str, trial:optuna.trial.Trial=None, e
                 "train/best_result": best_10_consec_avg
             }
         )
-    elif exact_hparams is not None:
-        writer.add_hparams(
-            hparam_dict=exact_hparams,
-            metric_dict={
-                "train/best_result": best_10_consec_avg
-            }
-        )
     return best_10_consec_avg
 
 
