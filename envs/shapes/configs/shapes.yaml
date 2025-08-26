@@ -2,13 +2,13 @@
 # ' ' - empty
 # 'T' - potential goal position in the test set (placement not allowed in training)
 grid:
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-  - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', 'A', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
-  - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
 goal_channel: true
 obs_type: vec

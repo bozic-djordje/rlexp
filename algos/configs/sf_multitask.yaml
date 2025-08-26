@@ -8,17 +8,17 @@ experiment:
   float_keys: [step_size, update_per_step]
   log_domain_keys: [step_size, update_per_step]
   # [0, 7, 8, 11]
-  bert_layer_index: 0
-  n_trials: 60
+  bert_layer_index: [0, 7, 8, 11]
+  n_trials: 1
   n_epochs: 1200
   # For simplicity, keep this equal to step_per_collect (you collect once per epoch)
-  epoch_steps: 4000
-  warmup_steps: 50000
+  epoch_steps: 400
+  warmup_steps: 5000
 
   # How many steps in the environment will be called before the agent enters the update phase.
   # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
-  step_per_collect: 4000
+  step_per_collect: 400
   # How many times will agen update() function be called
   # For 0.1 there needs to be 10 steps for a full update (meaning update() is called every 10 steps). 
   # For 1000 steps_per_collect there will be 1000/10 = 100 update() calls.
@@ -44,9 +44,9 @@ experiment:
   psi_update_tau: 0.1
   # Phi is updated more slowly than psi. For 0.25 phi will be updated on every 4th update() call. 
   # For steps_per_collect 1000 and update_per_step 0.1, phi will be updated 100/4 = 25 times.
-  phi_update_ratio: 1
+  phi_update_ratio: 0.25
 
-  buffer_size: 10000000
+  buffer_size: 10000
   prioritised_replay: false
   # How strongly priorities affect sampling
   priority_alpha: 0.7
@@ -69,13 +69,13 @@ environment:
   # ' ' - empty
   # 'T' - potential goal position in the test set (placement not allowed in training)
   grid:
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-    - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   goal_channel: false
   obs_type: vec

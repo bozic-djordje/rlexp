@@ -5,47 +5,47 @@ general:
 # optimised with Optuna
 experiment:
   # Which variables are to be interpreted as Optuna float delimiters
-  float_keys: [step_size, update_per_step]
-  log_domain_keys: [step_size, update_per_step]
+  float_keys: [step_size, update_per_step, phi_update_tau, psi_update_tau, phi_update_ratio]
+  log_domain_keys: [step_size]
   # [0, 7, 8, 11]
   bert_layer_index: 0
-  n_trials: 20
-  n_epochs: 1000
+  n_trials: 30
+  n_epochs: 12000
   # For simplicity, keep this equal to step_per_collect (you collect once per epoch)
-  epoch_steps: 4000
-  warmup_steps: 50000
+  epoch_steps: 400
+  warmup_steps: 2000
 
   # How many steps in the environment will be called before the agent enters the update phase.
   # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
-  step_per_collect: 4000
+  step_per_collect: 400
   # How many times will agen update() function be called
   # For 0.1 there needs to be 10 steps for a full update (meaning update() is called every 10 steps). 
   # For 1000 steps_per_collect there will be 1000/10 = 100 update() calls.
-  update_per_step: 0.01
+  update_per_step: [0.05, 0.2]
   
   # Algorithm hyper-parameters
-  phi_trunk_dim: [[4096, 2048, 1024, 768]]
+  phi_trunk_dim: [[4096, 2048, 768]]
   phi_head_dim: [[768]]
-  psi_nn_dim: [[768, 1024, 768]]
+  psi_nn_dim: [[768, 768], [768, 1024, 768]]
   use_reconstruction_loss: false
 
   phi_lr: [1e-5, 1e-4]
-  psi_lr: [1e-6, 1e-5]
+  psi_lr: [1e-6, 1e-4]
   phi_lambda: [1e-3, 5e-3]
   psi_lambda: [1e-4, 5e-4]
   batch_size: 128
-  episode_per_test: 10
+  episode_per_test: 3
 
   # Soft phi target network updating
-  phi_update_tau: 0.1
+  phi_update_tau: [0.1, 0.25]
   # Soft psi target network updating
-  psi_update_tau: 0.1
+  psi_update_tau: [0.1, 0.25]
   # Phi is updated more slowly than psi. For 0.25 phi will be updated on every 4th update() call. 
   # For steps_per_collect 1000 and update_per_step 0.1, phi will be updated 100/4 = 25 times.
-  phi_update_ratio: 1
+  phi_update_ratio: [0.25, 0.5]
 
-  buffer_size: 10000000
+  buffer_size: 5000
   l2_freq_scaling: false
   prioritised_replay: false
   # How strongly priorities affect sampling
@@ -69,19 +69,19 @@ environment:
   # ' ' - empty
   # 'T' - potential goal position in the test set (placement not allowed in training)
   grid:
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-    - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   goal_channel: false
   obs_type: vec
   num_objects: 2
   disc_fact: 0.99 #gamma
-  resample_episodes: 5
+  resample_episodes: 2
   max_steps: 30
   slip_chance: 0
   seed: 1
@@ -90,18 +90,18 @@ environment:
   use_features: [shape, colour]
   features:
     # circle, triangle, square, diamond, star, key
-    shape: [ball, triangle, square, diamond, star, key]
+    shape: [ball, triangle, square]
     # green, blue, red, yellow
-    colour: [red, blue, green, yellow]
+    colour: [red, blue, green]
 
   task_names: [go_to, go_to_easy, pick_up, retrieve]
   task_id: go_to
 
   go_to:
-    - Go to colour shape.
+    - colour shape
 
   go_to_easy:
-    - Go to colour shape.
+    - colour shape
 
   pick_up:
     - Pick up goal_formulation.
@@ -112,11 +112,9 @@ environment:
   default_feature: "0"
   
   reserved_combinations:
-  - shape: diamond
+  - shape: ball
     colour: red
-  - shape: star
+  - shape: triangle
     colour: blue
   - shape: square
     colour: green
-  - shape: ball
-    colour: yellow

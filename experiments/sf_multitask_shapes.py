@@ -16,7 +16,7 @@ from yaml_utils import load_yaml, save_yaml
 from algos.nets import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
 
 
-def experiment(store_path:str, config_path:str, trial:optuna.trial.Trial=None, exact_hparams=None) -> float:
+def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_hparams=None) -> float:
     _, store_path, precomp_path = setup_experiment(store_path=store_path, config_path=config_path)
     with open(config_path, 'r') as file:
         hparams = load_yaml(file)
