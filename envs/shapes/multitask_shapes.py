@@ -356,16 +356,18 @@ class ShapesAttrCombFactory(ShapesMultitaskFactory):
             train_features.pop(feature)
         
         train_features["loc"] = positions
-        train_candidates = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
-        n_candidates = len(train_candidates)
+        train_all = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
+        n_candidates = len(train_all)
         
         holdout_candidates = []
-        for candiadte in train_candidates:
+        train_candidates = []
+        for candiadte in train_all:
             c = deepcopy(candiadte)
             c.pop("loc")
             if c in self._holdout_combs:
                 holdout_candidates.append(candiadte)
-                train_candidates.remove(candiadte)
+            else:
+                train_candidates.append(candiadte)
         
         assert(n_candidates == len(train_candidates) + len(holdout_candidates))
         return train_candidates, holdout_candidates
