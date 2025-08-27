@@ -32,9 +32,11 @@ class SFBaseTrainingStats(TrainingStats):
 # TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
 # current parameters of the closest model we currently have?
 class MultiparamModule(nn.Module):
-    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float, precomp_embeddings: Dict):
+    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float, precomp_embeddings: Dict, init_from_closest:bool=False):
         super(MultiparamModule, self).__init__()
         self.precomp_embed = precomp_embeddings
+        self.init_from_closest = init_from_closest
+
         self.num_modules = num_modules
         self.tau = tau
         self._counters: List[int] = [0 for _ in range(num_modules)]
@@ -57,9 +59,29 @@ class MultiparamModule(nn.Module):
         if key in self._keys:
             return
         
+        if self.init_from_closest and len(self._keys) > 0:
+            keys = []
+            ws = []
+            for k in self._keys:
+                keys.append(k)
+                ws.append(self.precomp_embed[k])
+            
+            existing_ws = torch.stack(ws)
+            new_w = self.precomp_embed[key]
+
+            cos_sims = torch.matmul(existing_ws, new_w)
+            top_ind = torch.argmax(cos_sims)
+            top_key = keys[top_ind]
+        else:
+            top_key = None
+
         key_index = len(self._keys)
         self._keys.add(key)
         self._key_map[key] = key_index
+
+        if top_key is not None:
+            self.nets[self._key_map[key]].load_state_dict(self.nets[self._key_map[top_key]].state_dict())
+            self.t_nets[self._key_map[key]].load_state_dict(self.t_nets[self._key_map[top_key]].state_dict())
         
     def get_module(self, key:str, target=False) -> nn.Module:
         self._check_add_key(key=key)
@@ -157,6 +179,7 @@ class SFBase(BasePolicy):
             gamma:float=0.99, 
             seed:float=1., 
             terminal_rew:float=20,
+            init_from_closest:bool=True,
             dec_nn:Optional[torch.nn.Module]=None, 
             device:torch.device=torch.device("cpu")
         ):
@@ -189,7 +212,8 @@ class SFBase(BasePolicy):
             num_modules=num_skills, 
             lr=self.psi_lr,
             tau=psi_update_tau,
-            precomp_embeddings=self.precomp_embed
+            precomp_embeddings=self.precomp_embed,
+            init_from_closest=init_from_closest
         )
         
         self.dec_nn = dec_nn
@@ -639,6 +663,7 @@ class SFMix(SFBase):
             terminal_rew=terminal_rew,
             dec_nn=dec_nn,
             device=device,
+            init_from_closest=False
         )
         self.mix_nn: ScalarMix = mix_nn
         self._layers_to_mix = tuple(layers_to_mix)
