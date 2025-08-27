@@ -32,8 +32,9 @@ class SFBaseTrainingStats(TrainingStats):
 # TODO: How does knowledge transfer occurr here exactly? When we encounter a new goal, shouldn't we copy the
 # current parameters of the closest model we currently have?
 class MultiparamModule(nn.Module):
-    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float):
+    def __init__(self, base_module: nn.Module, num_modules: int, lr: float, tau:float, precomp_embeddings: Dict):
         super(MultiparamModule, self).__init__()
+        self.precomp_embed = precomp_embeddings
         self.num_modules = num_modules
         self.tau = tau
         self._counters: List[int] = [0 for _ in range(num_modules)]
@@ -97,6 +98,9 @@ class MultiparamModule(nn.Module):
 
     def forward(self, x: torch.Tensor, state: Dict=None, **kwargs):
         target = False
+        if state is None:
+            state = {}
+        
         if "target" in state and state["target"]:
             target = True
             
@@ -104,8 +108,7 @@ class MultiparamModule(nn.Module):
             module = self.get_module(key=state["key"], target=target)
             result = module(x, **kwargs)
         else:
-            modules = self.t_nets if target else self.nets
-            result = [module(x, **kwargs) for module in modules]
+            result = torch.stack([self.get_module(key=k, target=target)(x, **kwargs).squeeze(0) for k in self._keys], dim=0)
         return result
     
     def get_extra_state(self) -> Dict[str, Any]:
@@ -175,12 +178,18 @@ class SFBase(BasePolicy):
         
         self.phi_update_tau = phi_update_tau
         self.phi_update_freq = phi_update_ratio
+
+        self.precomp_embed = precomp_embeddings
+        for key in self.precomp_embed.keys():
+            self.precomp_embed[key] = self.precomp_embed[key] / (self.precomp_embed[key].norm(p=2) + 1e-8)
+            self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
         
         self.psi_nn: MultiparamModule = MultiparamModule(
             base_module=psi_nn, 
             num_modules=num_skills, 
             lr=self.psi_lr,
-            tau=psi_update_tau
+            tau=psi_update_tau,
+            precomp_embeddings=self.precomp_embed
         )
         
         self.dec_nn = dec_nn
@@ -191,11 +200,6 @@ class SFBase(BasePolicy):
             self.use_reconstruction_loss = False
             self.dec_optim = None
 
-        self.precomp_embed = precomp_embeddings
-        for key in self.precomp_embed.keys():
-            self.precomp_embed[key] = self.precomp_embed[key] / (self.precomp_embed[key].norm(p=2) + 1e-8)
-            self.precomp_embed[key] = self.precomp_embed[key].to(self.device)
-        
         self.update_count = 0  # Counter for training iterations
         self.r_counter = Counter()
         self.l2_freq_scaling = l2_freq_scaling
@@ -216,6 +220,10 @@ class SFBase(BasePolicy):
         self.max_action_num = self.action_space.n
         
         self.rng = torch.Generator().manual_seed(seed)
+
+    @property
+    def instructions(self):
+        return self.psi_nn.keys
     
     def set_eps(self, eps: float) -> None:
         """Set the eps for epsilon-greedy exploration."""
@@ -289,6 +297,33 @@ class SFBase(BasePolicy):
             act = argmax_random_tiebreak(q_logits)
             act = dist.sample()
         return Batch(act=act, state=state, dist=dist)
+    
+    def forward_gpi(self, batch, state, **kwargs):
+        num_skills = len(self.psi_nn.keys)
+        numerical_features = batch.obs.features
+        # Retrieve embeddings for instructions
+        w = self.instr_to_embedding(instrs=batch.obs.instr)
+        w = w.repeat(num_skills, 1)
+        
+        # shape: (batch_dim, num_actions, embedding_dim)
+        phi_sa = self.phi_nn(numerical_features)
+        _, num_actions, _ = phi_sa.shape
+        
+        phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+        # Does inference with all task policies: num_a x num_skills list
+        psi_all = torch.stack([self.psi_nn.forward(chunk.squeeze(1), {}) for chunk in phi_a], dim=0)
+        # Now transpose to (num_skills, num_a, feat_dim)
+        psi_all = psi_all.transpose(0, 1)
+        
+        # (num_skills, num_a)
+        q_logits = torch.bmm(psi_all, w.unsqueeze(2)).squeeze(2)
+        # Best action per skill and its value
+        skill_best_vals, skill_best_actions = q_logits.max(dim=1)
+        # Choose the skill whose best value is globally maximal
+        best_skill = skill_best_vals.argmax()
+        # Global best action across all skills
+        single_a = skill_best_actions[best_skill] 
+        return Batch(act=single_a, state=state)
     
     def psi_update(self, batch: Batch) -> Tuple[float, Tuple]:
         batch_size = len(batch)
