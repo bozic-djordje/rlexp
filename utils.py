@@ -4,7 +4,8 @@ import os
 import shutil
 import cv2
 import optuna
-from typing import Dict, Sequence
+from typing import Any, Dict, Sequence
+import json
 import numpy as np
 
 COLOUR_MAP = {
@@ -62,7 +63,7 @@ def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None, last_m
     
     if not os.path.isdir(store_path):
         os.mkdir(store_path)
-    return store_path, model_path, config_path, precomp_path
+    return store_path, model_path, config_path, precomp_path, run_id
 
 def setup_experiment(store_path:str, config_path:str):
     experiment_name = os.path.basename(config_path).split(".")[0]
@@ -177,3 +178,18 @@ def overlay_with_alpha(background: np.ndarray, overlay: np.ndarray, x: int, y: i
     else:
         # If overlay has no alpha channel, just overwrite
         roi[:] = overlay
+
+
+def update_json_file(file_pth: str, key: str, value: Dict[str, Any]) -> None:
+    try:
+        with open(file_pth, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+
+    # Insert or overwrite the given key
+    data[key] = value
+
+    # Write back to disk with nice indentation
+    with open(file_pth, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
