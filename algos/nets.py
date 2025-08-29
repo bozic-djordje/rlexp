@@ -1,10 +1,15 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 import torch
 import torch.nn as nn
 from tqdm import tqdm
 import numpy as np
 
 from transformers import BertTokenizer, BertModel
+import tensorflow as tf
+import tensorflow_hub as hub
+
+
+ELMO_URL = "https://tfhub.dev/google/elmo/3"
 
 
 def precompute_bert_embeddings(instructions: List[str], device: torch.device, batch_size:int=1024) -> dict:
@@ -53,6 +58,127 @@ def precompute_bert_embeddings(instructions: List[str], device: torch.device, ba
 def extract_bert_layer_embeddings(embedding_dict: Dict, layer_ind: int) -> Dict:
     layer_embeddings = {instr: embedding[layer_ind, :] for instr, embedding in embedding_dict.items()}
     return layer_embeddings
+
+
+def _mean_pool_time(x: np.ndarray) -> np.ndarray:
+    # x: (T, D) -> (D,)
+    if x.ndim != 2:
+        raise ValueError(f"Expected 2D token embedding array, got shape {x.shape}")
+    return x.mean(axis=0)
+
+
+def precompute_elmo_embeddings_tfhub(
+    instructions: List[str],
+    batch_size: int = 256,
+) -> Dict[str, np.ndarray]:
+    """
+    Returns dict: instruction -> (L, 1024) array.
+    - If 'tokens' signature is available: L=3 (word_emb, lstm_outputs1, lstm_outputs2), each mean-pooled over tokens.
+    - If only 'default' signature is available: L=1 (elmo), already sentence-level (1024,).
+      In that case we still return shape (1, 1024) for API consistency.
+    """
+    layer = hub.load(ELMO_URL)
+
+    # Discover signatures safely
+    sigs = {}
+    try:
+        sigs = layer.signatures
+    except Exception:
+        pass
+
+    has_tokens = isinstance(sigs, dict) and ("tokens" in sigs)
+
+    outputs: Dict[str, np.ndarray] = {}
+
+    if has_tokens:
+        # ---- Path A: tokens signature (preferred; per-token + per-layer) ----
+        f_tokens = sigs["tokens"]  # callable
+        tokenized = [s.strip().split() for s in instructions]
+
+        for i in tqdm(range(0, len(instructions), batch_size), desc="ELMo tokens batching"):
+            batch_tokens = tokenized[i:i + batch_size]
+            lengths = [len(toks) for toks in batch_tokens]
+
+            ragged_tokens = tf.ragged.constant(batch_tokens, dtype=tf.string)
+            lengths_tf = tf.constant(lengths, dtype=tf.int32)
+
+            # This returns a dict of tensors; key presence can vary by build.
+            out = f_tokens(tokens=ragged_tokens, sequence_len=lengths_tf)
+
+            # Safely fetch available keys
+            def _get(name):  # shape: (B, T, 1024)
+                if name in out:
+                    return out[name].numpy()
+                return None
+
+            word_emb      = _get("word_emb")
+            lstm_outputs1 = _get("lstm_outputs1")
+            lstm_outputs2 = _get("lstm_outputs2")
+            elmo_default  = _get("elmo")  # sometimes present (weighted mix per token)
+
+            for b in range(len(batch_tokens)):
+                layers = []
+                if word_emb is not None:
+                    layers.append(_mean_pool_time(word_emb[b, :lengths[b], :]))
+                if lstm_outputs1 is not None:
+                    layers.append(_mean_pool_time(lstm_outputs1[b, :lengths[b], :]))
+                if lstm_outputs2 is not None:
+                    layers.append(_mean_pool_time(lstm_outputs2[b, :lengths[b], :]))
+
+                # If none of the three layer keys exist, fall back to elmo (per-token) if available
+                if not layers and elmo_default is not None:
+                    layers.append(_mean_pool_time(elmo_default[b, :lengths[b], :]))
+
+                if not layers:
+                    # Absolute fallback: zero vector to keep shapes consistent
+                    layers.append(np.zeros((1024,), dtype=np.float32))
+
+                outputs[instructions[i + b]] = np.stack(layers, axis=0).astype(np.float32)
+
+    else:
+        # ---- Path B: default signature (strings only → sentence embedding) ----
+        # With KerasLayer, calling the layer often returns a dict with key 'elmo' or a tensor [B,1024].
+        # We'll support both.
+        kl = hub.KerasLayer(ELMO_URL, trainable=False)
+        for i in tqdm(range(0, len(instructions), batch_size), desc="ELMo default batching"):
+            batch = instructions[i:i + batch_size]
+            x = tf.constant(batch, dtype=tf.string)
+            y = kl(x)  # may be a dict or a tensor depending on TF/Hub version
+
+            if isinstance(y, dict):
+                if "elmo" in y:
+                    arr = y["elmo"].numpy()  # (B, 1024)
+                else:
+                    # take first value as best effort
+                    arr = next(iter(y.values())).numpy()
+            else:
+                arr = y.numpy()  # (B, 1024)
+
+            for j in range(arr.shape[0]):
+                # wrap as (1, 1024) so API matches the '3-layer' path shape convention
+                outputs[batch[j]] = arr[j][None, :].astype(np.float32)
+
+    return outputs
+
+
+def extract_elmo_layer_embeddings_tfhub(
+    embedding_dict: Dict[str, np.ndarray],
+    layer_ind: int
+) -> Dict[str, np.ndarray]:
+    """
+    Select a single ELMo layer from the precomputed dict.
+    layer_ind ∈ {0,1,2} if tokens-signature path; ∈ {0} if default-signature (only one layer).
+    Returns: dict[instruction] -> (1024,) array
+    """
+    result = {}
+    for instr, emb in embedding_dict.items():
+        if emb.ndim != 2:
+            raise ValueError(f"Expected (L,1024) array, got shape {emb.shape} for '{instr}'")
+        L = emb.shape[0]
+        if layer_ind >= L:
+            raise ValueError(f"Requested layer {layer_ind} but only {L} layer(s) available for '{instr}'.")
+        result[instr] = emb[layer_ind, :].copy()
+    return result
 
 
 class ScalarMix(torch.nn.Module):
