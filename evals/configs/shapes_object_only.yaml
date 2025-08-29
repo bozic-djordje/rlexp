@@ -1,0 +1,62 @@
+grid:
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+# If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
+goal_channel: true
+obs_type: vec
+num_objects: 2
+resample_episodes: 1
+max_steps: 200
+slip_chance: 0
+seed: 1
+
+use_features: [shape, colour]
+features:
+  # circle, triangle, square, diamond, star, key
+  shape: [ball, triangle, square, diamond, star, key]
+  # green, blue, red, yellow
+  colour: [red, blue, green, yellow]
+
+synonyms:
+  ball: [ball, sphere, circle]
+  triangle: [triangle, triad, ternion]
+  square: [square, rectangle, quadrilateral]
+  diamond: [diamond, gem, jewel]
+  star: [star, sun, celestial]
+  key: [key, unlocker, passkey]
+  red: [red, scarlet, ruby, crimson, vermilion]
+  blue: [blue, navy, cobalt, sapphire, cerulean]
+  green: [green, verdant, jade, olive, lime]
+  yellow: [yellow, golden, canary, lemon, ochre]
+
+
+task_names: [go_to, go_to_easy, pick_up, retrieve]
+task_id: go_to 
+
+go_to:
+  - colour shape
+
+go_to_easy:
+  - Go to colour shape.
+
+pick_up:
+  - Pick up goal_formulation.
+
+retrieve:
+  - Retrieve goal_formulation.
+
+default_feature: "0" 
+reserved_combinations:
+  - shape: diamond
+    colour: red
+  - shape: star
+    colour: blue
+  - shape: square
+    colour: green
+  - shape: ball
+    colour: yellow
