@@ -9,33 +9,44 @@ experiment:
   log_domain_keys: [step_size, update_per_step]
   # [0, 7, 8, 11]
   bert_layer_index: 0
-  n_trials: 60
-  n_epochs: 400
-  # Number of update steps in epoch
-  epoch_steps: 1000
-  warmup_steps: 2000
+  n_trials: 1
+  n_epochs: 1200
+  # For simplicity, keep this equal to step_per_collect (you collect once per epoch)
+  epoch_steps: 400
+  warmup_steps: 5000
 
   # How many steps in the environment will be called before the agent enters the update phase.
-  # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=02.5
+  # Works in synergy with update_per_step. For step_per_collect=200 and update_per_step=0.25
   # The agent will enter update stage every 200 environment steps and get updated 50 times. 
-  step_per_collect: 200
-  # How many updates will happen to the network per step in the environment
-  # For 0.25 update happens every 4 steps
-  update_per_step: [0.2, 0.5]
+  step_per_collect: 400
+  # How many times will agen update() function be called
+  # For 0.1 there needs to be 10 steps for a full update (meaning update() is called every 10 steps). 
+  # For 1000 steps_per_collect there will be 1000/10 = 100 update() calls.
+  update_per_step: 0.01
   
   # Algorithm hyper-parameters
-  phi_trunk_dim: [[2048, 1024, 768], [1024, 768]]
-  phi_head_dim: [[768]]
-  psi_nn_dim: [[768, 1024, 768], [768, 768]]
+  phi_trunk_dim: [2048, 1024, 768]
+  phi_head_dim: [768]
+  psi_nn_dim: [768, 1024, 768]
   use_reconstruction_loss: false
-  step_size: [1e-5, 1e-4]
-  batch_size: [128, 256]
-  l2_freq_scaling: false
-  target_update_steps: [200, 500, 1000]
-  cycle_update_steps: [20, 200, 400]
+  phi_lr: 1e-5
+  psi_lr: 1e-6
+  phi_lambda: 1e-3
+  psi_lambda: 1e-4
+  batch_size: 128
   episode_per_test: 1
 
-  buffer_size: 1000000
+  l2_freq_scaling: false
+
+  # Soft phi target network updating
+  phi_update_tau: 0.1
+  # Soft psi target network updating
+  psi_update_tau: 0.1
+  # Phi is updated more slowly than psi. For 0.25 phi will be updated on every 4th update() call. 
+  # For steps_per_collect 1000 and update_per_step 0.1, phi will be updated 100/4 = 25 times.
+  phi_update_ratio: 0.25
+
+  buffer_size: 10000
   prioritised_replay: false
   # How strongly priorities affect sampling
   priority_alpha: 0.7
@@ -50,7 +61,7 @@ experiment:
   epsilon_end: 0.05
   epsilon_fraction: 0.8
   test_epsilon: 0.05
-  linear_schedule: [true, false]
+  linear_schedule: false
 
 # Environment hyper-parameters are fixed
 environment:
@@ -58,25 +69,25 @@ environment:
   # ' ' - empty
   # 'T' - potential goal position in the test set (placement not allowed in training)
   grid:
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
-    - ['W', ' ', ' ', 'T', 'W', 'T', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', 'W', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'W']
-    - ['W', ' ', 'W', ' ', 'T', ' ', 'W', ' ', 'T', 'W']
-    - ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+    - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+    - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+    - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
   # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
   goal_channel: false
   obs_type: vec
   num_objects: 2
   disc_fact: 0.99 #gamma
-  resample_episodes: 1000000000
+  resample_episodes: 5
   max_steps: 30
   slip_chance: 0
   seed: 1
 
   # use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
-  use_features: [colour]
+  use_features: [shape, colour]
   features:
     # circle, triangle, square, diamond, star, key
     shape: [ball, triangle, square, diamond, star, key]

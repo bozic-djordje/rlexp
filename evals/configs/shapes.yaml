@@ -1,6 +1,3 @@
-# 'W' - wall
-# ' ' - empty
-# 'T' - potential goal position in the test set (placement not allowed in training)
 grid:
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
   - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
@@ -18,7 +15,6 @@ max_steps: 200
 slip_chance: 0
 seed: 1
 
-# use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
 use_features: [shape, colour]
 features:
   # circle, triangle, square, diamond, star, key
@@ -26,11 +22,29 @@ features:
   # green, blue, red, yellow
   colour: [red, blue, green, yellow]
 
+synonyms:
+  ball: [sphere, circle]
+  triangle: [triad, ternion]
+  square: [rectangle, quadrilateral]
+  diamond: [gem, jewel]
+  star: [sun, celestial]
+  key: [unlocker, passkey]
+  red: [scarlet, ruby, crimson, vermilion]
+  blue: [navy, cobalt, sapphire, cerulean]
+  green: [verdant, jade, olive, lime]
+  yellow: [golden, canary, lemon, ochre]
+
+
 task_names: [go_to, go_to_easy, pick_up, retrieve]
 task_id: go_to 
 
 go_to:
   - Go to colour shape.
+  - Reach colour shape.
+  - Move forward to colour shape.
+  - Head over to colour shape.
+  - Navigate to colour shape.
+  - colour shape.
 
 go_to_easy:
   - Go to colour shape.

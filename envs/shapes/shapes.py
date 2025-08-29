@@ -115,7 +115,9 @@ class Shapes(gym.Env):
         vec_ind = 2
 
         obj_cpy = deepcopy(self._objects)
-        for obj in obj_cpy:
+        sorted_objs = sorted(obj_cpy, key=lambda d: (d["loc"][0], d["loc"][1]))
+
+        for obj in sorted_objs:
             loc = obj.pop("loc")
             is_goal = obj.pop("is_goal", False)
             if is_goal:
@@ -143,8 +145,11 @@ class Shapes(gym.Env):
         return game_map, game_vec, goal_location, agent_location
     
     def _init_start_location(self):
-        empty_locations = np.where(self._grid == ' ')
-        candidates = list(zip(*empty_locations))
+        specified_locs = np.where(self._grid == 'A')
+        candidates = list(zip(*specified_locs))
+        if len(candidates) == 0:
+            empty_locations = np.where(self._grid == ' ')
+            candidates = list(zip(*empty_locations))
         loc = self.rng.choice(candidates)
         return tuple(loc)
     
@@ -381,9 +386,10 @@ class ShapesGoto(Shapes):
 
         if self._agent_location == self._goal_location:
             is_terminal = True
-            reward = 20
+            reward = 10
         elif self._agent_location in confounder_locations:
             reward = -10
+            info = {"is_confounder": True}
         
         return obs, reward, is_terminal, truncated, info
     
@@ -398,7 +404,7 @@ class ShapesGotoEasy(Shapes):
 
         if self._agent_location == self._goal_location:
             is_terminal = True
-            reward = 20
+            reward = 10
         
         return obs, reward, is_terminal, truncated, info
 

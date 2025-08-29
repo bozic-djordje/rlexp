@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from itertools import product
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import os
 import numpy as np
 import gymnasium as gym
@@ -11,14 +11,14 @@ from copy import deepcopy
 from envs.shapes.shapes import Shapes, ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
 
 
-def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
+def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
         # Split the sentence into words and punctuation
         tokens = re.findall(r'\w+|[^\w\s]', instr)
 
         result_tokens = []
         for token in tokens:
-            if token in obj:
-                result_tokens.append(obj[token])
+            if token in goal:
+                result_tokens.append(goal[token])
             elif token in all_feature_keys:
                 # It's a placeholder, but not provided — skip it
                 continue
@@ -36,7 +36,7 @@ def generate_instruction(instr: str, obj: dict, all_feature_keys: list) -> str:
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, obs_type:str="box", seed:int=0):
+    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, change_loc_on_fix_goal:bool=False, obs_type:str="box", seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._num_objects = num_objects
@@ -48,6 +48,8 @@ class MultitaskShapes(gym.Env):
         self._instr_templates = instruction_templates
         
         self._objects, self._instr = self._sample_task()
+        self._goal_obj = self._objects[0]
+        self._change_loc = change_loc_on_fix_goal
 
         self._task_num = 0
         self._resample_interval = resample_interval
@@ -127,20 +129,53 @@ class MultitaskShapes(gym.Env):
     @property
     def agent_location(self) -> Tuple:
         return self._env.agent_location
+    
+    @property
+    def goal_list(self) -> List:
+        return deepcopy(self._allowed_objects)
+    
+    def set_resample_interval(self, interval:int) -> None:
+        self._resample_interval = interval
 
-    def _sample_objects(self, candidates, n, loc_key='loc'):
-        # TODO: Fix this so there can be no two objects that share the same feature in easy modes! (see notebook)
+    def _sample_objects(self, candidates, n, loc_key='loc', goal:Dict=None):
         seen_locs = set()
         seen_others = set()
         sampled = []
 
+        # Use the same shape as a goal, but resample its location
+        if goal is not None:
+            if loc_key not in goal:
+                candidates_cpy = deepcopy(candidates)
+                goal_candidates = []
+                
+                cand: Dict
+                for cand in candidates_cpy:
+                    # Strip each candidate of irrelevant keys
+                    loc = cand.pop(loc_key)
+                    
+                    if cand == goal:
+                        cand[loc_key] = loc
+                        goal_candidates.append(cand)
+                
+                self.rng.shuffle(goal_candidates)
+                goal = goal_candidates[0]
+            
+            sampled.append(goal)
+            seen_locs.add(goal[loc_key])
+            others = tuple(sorted((k, v) for k, v in goal.items() if k != loc_key and k != "is_goal"))
+            
+            seen_others.add(others)
+
         indices = list(range(len(candidates)))
         self.rng.shuffle(indices)
+
+        if len(sampled) == n:
+            return sampled
 
         for idx in indices:
             d = candidates[idx]
             loc = d[loc_key]
-            others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key))
+            others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key and k != "is_goal"))
 
             if loc in seen_locs or others in seen_others:
                 continue
@@ -151,25 +186,39 @@ class MultitaskShapes(gym.Env):
 
             if len(sampled) == n:
                 break
+        
+        for sample in sampled:
+            if "is_goal" in sample:
+                d.pop("is_goal")
 
-        return sampled
+        return deepcopy(sampled)
 
-    def _sample_task(self) -> List:
-        objects = self._sample_objects(candidates=self._allowed_objects, n=self._num_objects)
-
+    def _sample_task(self, goal:Dict=None) -> List:
+        if goal is not None and "is_goal" in goal:
+            goal.pop("is_goal")
+        
+        objects = self._sample_objects(candidates=self.goal_list, n=self._num_objects, goal=goal)
         instr = self.rng.choice(self._instr_templates)
-        instr = generate_instruction(instr=instr, obj=objects[0], all_feature_keys=self._features.keys())
+        instr = generate_instruction(instr=instr, goal=objects[0], all_feature_keys=self._features.keys())
         
         objects[0]["is_goal"] = True
         self.rng.shuffle(objects)
 
         return objects, instr
     
-    def reset(self, seed=None):
+    def reset(self, seed=None, options: Optional[dict]={}):
         self._task_num += 1
-        # In easy mode only one configuration exists
-        if self._task_num % self._resample_interval == 0:
-            self._objects, self._instr = self._sample_task()
+        if "goal" in options:
+            goal = deepcopy(options["goal"])
+            self._objects, self._instr = self._sample_task(goal=goal)
+        else:
+            if self._task_num % self._resample_interval == 0:
+                self._objects, self._instr = self._sample_task()
+            else:
+                goal = deepcopy(self._objects[0])
+                if self._change_loc:
+                    goal.pop("loc")
+                self._objects, self._instr = self._sample_task(goal=goal)
         
         _, info = self._env.reset(seed, options={"objects": self._objects})
         return self.obs, info
@@ -197,16 +246,27 @@ class ShapesMultitaskFactory(ABC):
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
         pass
 
-    @abstractmethod
-    def get_all_instructions(self) -> List[str]:
-        pass
+    def get_all_instructions(self):
+        instructions = []
+        candidates = deepcopy(self._train_set)
+        candidates.extend(self._holdout_set)
+        
+        for candidate in candidates:
+            for template in self._hparams[self._hparams["task_id"]]:
+                instr = generate_instruction(
+                    instr=template, 
+                    goal=candidate, 
+                    all_feature_keys=self._hparams["features"].keys()
+                )
+                instructions.append(instr)
+        return list(set(instructions))
     
-    def get_env(self, set_id:int) -> MultitaskShapes:
+    def get_env(self, set_id:str, purpose:str='TRAIN') -> MultitaskShapes:
         """Generates MultitaskShapes environments split into train and holdout environments.
         Args:
-            set_id (int): In {'TRAIN', 'HOLDOUT', 'HARD_HOLDOUT'}. 
+            set_id (str): In {'TRAIN', 'HOLDOUT', 'HARD_HOLDOUT'}. 
             Each contains disjoint sets of certain environment properties. 
-
+            purpose (str): In {'TRAIN', 'EVAL'}.
         Returns:
             MultitaskShapes
         """
@@ -217,6 +277,12 @@ class ShapesMultitaskFactory(ABC):
         else:
             raise ValueError(f'set_id={set_id} not in [TRAIN, HOLDOUT, HARD_HOLDOUT].')
         
+        # If we are using the environment for evaluation, we want to resample tasks on every episode
+        if purpose == 'EVAL':
+            resample_interval = 1
+        else:
+            resample_interval = self._hparams["resample_episodes"]
+        
         env = MultitaskShapes(
                 allowed_objects=allowed_objects,
                 grid=self._hparams["grid"], 
@@ -225,7 +291,7 @@ class ShapesMultitaskFactory(ABC):
                 feature_order=self._hparams["use_features"], 
                 features=self._hparams["features"],
                 num_objects=self._hparams["num_objects"], 
-                resample_interval=self._hparams["resample_episodes"], 
+                resample_interval= resample_interval, 
                 store_path=self._store_path, 
                 default_feature=self._hparams["default_feature"], 
                 max_steps=self._hparams["max_steps"], 
@@ -265,28 +331,46 @@ class ShapesPositionFactory(ShapesMultitaskFactory):
         holdout_candidates = [dict(zip(holdout_features.keys(), values)) for values in product(*holdout_features.values())]
 
         return train_candidates, holdout_candidates
-    
-    def get_all_instructions(self):
-        instructions = []
-        candidates = deepcopy(self._train_set)
-        candidates.extend(self._holdout_set)
-        
-        for candidate in candidates:
-            for template in self._hparams[self._hparams["task_id"]]:
-                instr = generate_instruction(
-                    instr=template, 
-                    obj=candidate, 
-                    all_feature_keys=self._hparams["features"].keys()
-                )
-                instructions.append(instr)
-        return list(set(instructions))
 
 
 # Test symbol grounding by reserving certain feature combinations
 class ShapesAttrCombFactory(ShapesMultitaskFactory):
-    # TODO
+    def __init__(self, hparams, store_path):
+        self._holdout_combs = hparams["reserved_combinations"]
+        super().__init__(hparams, store_path)
+    
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
-        pass
+        grid = np.array(grid)
+        
+        positions = np.where(grid == 'T')
+        positions = list(zip(positions[0], positions[1]))
+        if len(positions) == 0:
+            positions = np.where(grid == ' ')
+            positions = list(zip(positions[0], positions[1]))
+
+        use_features = set(self._hparams["use_features"])
+        train_features: Dict = deepcopy(self._hparams["features"])
+        keys_to_remove = [k for k in train_features if k not in use_features]
+        
+        for feature in keys_to_remove:
+            train_features.pop(feature)
+        
+        train_features["loc"] = positions
+        train_all = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
+        n_candidates = len(train_all)
+        
+        holdout_candidates = []
+        train_candidates = []
+        for candiadte in train_all:
+            c = deepcopy(candiadte)
+            c.pop("loc")
+            if c in self._holdout_combs:
+                holdout_candidates.append(candiadte)
+            else:
+                train_candidates.append(candiadte)
+        
+        assert(n_candidates == len(train_candidates) + len(holdout_candidates))
+        return train_candidates, holdout_candidates
 
     
 if __name__ == "__main__":
@@ -300,7 +384,7 @@ if __name__ == "__main__":
     with open(yaml_path, 'r') as file:
         hparams = yaml.safe_load(file)
 
-    env_factory = ShapesPositionFactory(
+    env_factory = ShapesAttrCombFactory(
         hparams=hparams, 
         store_path=store_path
     )
@@ -309,7 +393,7 @@ if __name__ == "__main__":
     instrs = env_factory.get_all_instructions()
     
     for episode in tqdm(range(10)):
-        obs, _ = env.reset()
+        obs, _ = env.reset(options={"goal": DEFAULT_OBJECTS[0]})
         done = False
 
         while not done:
@@ -317,4 +401,4 @@ if __name__ == "__main__":
             next_obs, reward, terminated, truncated, _ = env.step(action)
             obs = next_obs
             done = terminated or truncated
-        env.store_frame(plot_name=f"final_step_multitask_{env.task_num}", use_png=True)
+        env.store_frame(plot_name=f"final_step_multitask_{env.task_num}")

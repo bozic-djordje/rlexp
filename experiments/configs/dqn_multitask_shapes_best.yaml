@@ -1,0 +1,69 @@
+'general':
+  'seed': 1
+'experiment':
+  'bert_layer_index': 0
+  'n_trials': 20
+  'n_epochs': 14000
+  'epoch_steps': 400
+  'warmup_steps': 2000
+  'step_per_collect': 400
+  'update_per_step': 0.05756426583707797
+  'hidden_dim': [4096, 2048, 768]
+  'lr': 1.0e-05
+  'phi_lr': 0.0001
+  'psi_lr': 1.0e-05
+  'phi_lambda': 0.001
+  'psi_lambda': 0.0005
+  'batch_size': 128
+  'episode_per_test': 3
+  'phi_update_tau': 0.1
+  'psi_update_tau': 0.1
+  'phi_update_ratio': 0.25
+  'target_update_steps': 1000
+  'buffer_size': 5000
+  'l2_freq_scaling': false
+  'prioritised_replay': false
+  'priority_alpha': 0.7
+  'priority_beta_start': 0.4
+  'priority_beta_end': 1.0
+  'priority_beta_frac': 0.8
+  'epsilon_start': 1
+  'epsilon_end': 0.05
+  'epsilon_fraction': 0.8
+  'test_epsilon': 0.05
+  'linear_schedule': false
+'environment':
+  'grid':
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+  - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  'goal_channel': false
+  'obs_type': 'vec'
+  'num_objects': 2
+  'disc_fact': 0.99
+  'resample_episodes': 2
+  'max_steps': 30
+  'slip_chance': 0
+  'seed': 1
+  'use_features': ['shape', 'colour']
+  'features':
+    'shape': ['ball', 'triangle', 'square']
+    'colour': ['red', 'blue', 'green']
+  'task_names': ['go_to', 'go_to_easy', 'pick_up', 'retrieve']
+  'task_id': 'go_to'
+  'go_to': ['colour shape']
+  'go_to_easy': ['colour shape']
+  'pick_up': ['Pick up goal_formulation.']
+  'retrieve': ['Retrieve goal_formulation.']
+  'default_feature': '0'
+  'reserved_combinations':
+  - 'shape': 'ball'
+    'colour': 'red'
+  - 'shape': 'triangle'
+    'colour': 'blue'
+  - 'shape': 'square'
+    'colour': 'green'

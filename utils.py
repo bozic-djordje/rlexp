@@ -1,9 +1,11 @@
+from copy import deepcopy
 from datetime import datetime
 import os
 import shutil
 import cv2
 import optuna
-from typing import Dict, Sequence
+from typing import Any, Dict, Sequence
+import json
 import numpy as np
 
 COLOUR_MAP = {
@@ -28,7 +30,7 @@ def setup_artefact_paths(script_path:str, config_name:str=None):
         os.mkdir(store_path)
     return store_path, yaml_path
 
-def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
+def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None, last_model=False):
     
     script_dir = os.path.dirname(script_path)
     store_path = os.path.join(script_dir, 'artefacts')
@@ -51,7 +53,8 @@ def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
 
         run_path = candidate_path or os.path.join(experiments_root, run_id)
 
-    model_path = os.path.join(run_path, "best_model.pth")
+    model_name = "last_model.pth" if last_model else "best_model.pth"
+    model_path = os.path.join(run_path, model_name)
     precomp_path = os.path.join(os.path.dirname(run_path), "precomputed")
     
     if run_id is None:
@@ -60,7 +63,7 @@ def setup_eval_paths(script_path:str, run_path:str=None, run_id:str=None):
     
     if not os.path.isdir(store_path):
         os.mkdir(store_path)
-    return store_path, model_path, config_path, precomp_path
+    return store_path, model_path, config_path, precomp_path, run_id
 
 def setup_experiment(store_path:str, config_path:str):
     experiment_name = os.path.basename(config_path).split(".")[0]
@@ -117,6 +120,24 @@ def sample_hyperparams(trial:optuna.trial.Trial, hparams: Dict) -> Dict:
             sampled_hparams[key] = sampled_val
     return opt_hparams, sampled_hparams
 
+
+def iterate_hyperparams(hparams: Dict, key:str) -> Dict:
+    if "float_keys" in hparams:
+        hparams.pop("float_keys")
+    
+    if "log_domain_keys" in hparams:
+        hparams.pop("log_domain_keys")
+    
+    hparams_list = []
+
+    for val in hparams[key]:
+        hp = deepcopy(hparams)
+        hp[key] = val
+        hparams_list.append(hp)
+
+    return hparams_list
+    
+
 def load_and_resize_png(path:str, cell_size:int, keep_alpha:bool=False) -> np.ndarray:
     """
     Load the PNG image from 'path' and resize it to (cell_size, cell_size).
@@ -157,3 +178,18 @@ def overlay_with_alpha(background: np.ndarray, overlay: np.ndarray, x: int, y: i
     else:
         # If overlay has no alpha channel, just overwrite
         roi[:] = overlay
+
+
+def update_json_file(file_pth: str, key: str, value: Dict[str, Any]) -> None:
+    try:
+        with open(file_pth, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+
+    # Insert or overwrite the given key
+    data[key] = value
+
+    # Write back to disk with nice indentation
+    with open(file_pth, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)

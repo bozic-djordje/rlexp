@@ -88,20 +88,7 @@ class ScalarMix(torch.nn.Module):
         """
         Compute a weighted average of the `tensors`.  The input tensors an be any shape
         with at least two dimensions, but must all be the same shape.
-
-        When `do_layer_norm=True`, the `mask` is required input.  If the `tensors` are
-        dimensioned  `(dim_0, ..., dim_{n-1}, dim_n)`, then the `mask` is dimensioned
-        `(dim_0, ..., dim_{n-1})`, as in the typical case with `tensors` of shape
-        `(batch_size, timesteps, dim)` and `mask` of shape `(batch_size, timesteps)`.
-
-        When `do_layer_norm=False` the `mask` is ignored.
         """
-        if len(tensors) != self.mixture_size:
-            raise ValueError(
-                "{} tensors were passed, but the module was initialized to "
-                "mix {} tensors.".format(len(tensors), self.mixture_size)
-            )
-
         normed_weights = torch.nn.functional.softmax(
             torch.cat([parameter for parameter in self.scalar_parameters]), dim=0
         )
@@ -277,27 +264,32 @@ class FCTree(nn.Module):
 
 
 class FCActionValue(nn.Module):
-    def __init__(self, in_channels:int=3, num_actions:int=4, h:Tuple[int]=(768,), in_dim:Tuple[int, int]=(10,10), device:torch.device=torch.device("cpu")):
+    def __init__(self, num_actions:int, h:Tuple[int], in_dim:Tuple, device:torch.device=torch.device("cpu")):
         super(FCActionValue, self).__init__()
         self.device = device
         self.num_actions = num_actions
-        H, W = in_dim
 
-        flat_input_dim = in_channels * H * W
+        # Handle multidimensional input
+        if isinstance(in_dim, tuple) or isinstance(in_dim, list):
+            self.flatten_input = True
+            self.flat_in_dim = int(torch.tensor(in_dim).prod().item())
+        else:
+            self.flatten_input = False
+            self.flat_in_dim = in_dim
 
         layers = []
 
         if len(h) == 0:
             layers.extend([
                 nn.Linear(flat_input_dim, num_actions, dtype=torch.float32),
-                nn.LeakyReLU(negative_slope=0.1)
+                nn.ReLU()
             ])
         else:
-            layers.append(nn.Linear(flat_input_dim, h[0], dtype=torch.float32))
-            layers.append(nn.LeakyReLU(negative_slope=0.1))
+            layers.append(nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32))
+            layers.append(nn.ReLU())
             for i in range(len(h) - 1):
                 layers.append(nn.Linear(h[i], h[i + 1], dtype=torch.float32))
-                layers.append(nn.LeakyReLU(negative_slope=0.1))
+                layers.append(nn.ReLU())
             layers.append(nn.Linear(h[-1], num_actions, dtype=torch.float32))
 
         self.model = nn.Sequential(*layers)
@@ -310,7 +302,9 @@ class FCActionValue(nn.Module):
         else:
             x = x.to(self.device)
 
-        x = x.view(x.size(0), -1)  # Flatten from (B, C, H, W) to (B, C*H*W)
+        if self.flatten_input:
+            x = x.view(x.size(0), -1)
+
         q_values = self.model(x)
         return q_values, state
 
@@ -360,8 +354,8 @@ class ConvActionValue(nn.Module):
 
     
 class ConcatActionValue(FCActionValue):
-    def __init__(self, in_dim, num_actions, precom_embeddings:Dict, h:Tuple=(16), embed_in: int=None, embed_dim:int=32, device:torch.device=torch.device("cpu")):
-        super(ConcatActionValue, self).__init__(in_dim, num_actions, h, embed_in, embed_dim)
+    def __init__(self, in_dim, num_actions, precom_embeddings:Dict, h:Tuple=(16), device:torch.device=torch.device("cpu")):
+        super(ConcatActionValue, self).__init__(in_dim=in_dim, num_actions=num_actions, h=h)
         self.precomp_embed = precom_embeddings
         self.device = device
 
@@ -382,7 +376,7 @@ class ConcatActionValue(FCActionValue):
 
         # Concatenate numerical features with instruction embeddings
         concatenated_inputs = torch.cat((numerical_features, instruction_embeddings), dim=1)
-        return self.nnet(concatenated_inputs), state
+        return self.model(concatenated_inputs), state
 
 
 if __name__ == "__main__":

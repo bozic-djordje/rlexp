@@ -1,14 +1,18 @@
 from abc import abstractmethod, ABC
+from tianshou.trainer import BaseTrainer
+from tianshou.data.collector import CollectStatsBase
+from tianshou.policy import BasePolicy
+from tianshou.policy.base import TrainingStats
 from tianshou.policy import BasePolicy
 from tianshou.utils import TensorboardLogger
-from tianshou.data import PrioritizedReplayBuffer
+from tianshou.data import PrioritizedReplayBuffer, ReplayBuffer, Batch, Collector
 from collections import defaultdict
 from gymnasium import Env
 from tqdm import tqdm
-from typing import Any, Dict, Callable, List
+from typing import Any, Dict, Callable, List, Tuple, Union
 import torch
 import numpy as np
-from typing import Union, Tuple
+from collections import defaultdict
 import math
 
 
@@ -167,6 +171,20 @@ class BetaAnnealHook(EpochHook):
             beta = self.b0 + (self.b1 - self.b0) * (global_step / self.anneal_steps)
         self.rb.set_beta(beta)
 
+class TestFnHook(EpochHook):
+    def __init__(self, agent: BasePolicy, logger: TensorboardLogger, epsilon: float, episodes_per_test: int, collector: Collector, history: List):
+        super().__init__(agent, logger)
+        self.epsilon = epsilon
+        self.col = collector
+        self.n_episode = episodes_per_test
+        self.history = history
+
+    def hook(self, epoch, global_step):
+        self.agent.set_eps(self.epsilon)
+        result = self.col.collect(n_episode=self.n_episode)
+        mean_return = result.returns.mean()
+        self.history.append(mean_return)
+
 
 class SaveHook:
     def __init__(self, save_path:str):
@@ -216,3 +234,112 @@ def argmax_random_tiebreak(qs: torch.Tensor) -> torch.Tensor:
     rand = torch.rand_like(qs)                                  # (B, A), uniform random
     rand[~is_max] = -1.0                                         # mask out non-max entries
     return rand.argmax(dim=1)                                   # pick random max index
+
+
+class SFTrainer(BaseTrainer):
+    """Off-policy trainer, but unlike Tianshou's off policy trainer, this one passes the entire buffer to .update.
+    Note that it is expected that the learn method of a policy will perform
+    batching when using this trainer.
+    """
+    
+    def policy_update_fn(
+        self, 
+        collect_stats: CollectStatsBase,
+    ) -> TrainingStats:
+        """Perform `update_per_step * n_collected_steps` gradient steps by sampling mini-batches from the buffer.
+
+        :param collect_stats: the :class:`~TrainingStats` instance returned by the last gradient step. Some values
+            in it will be replaced by their moving averages.
+        """
+        assert self.train_collector is not None
+        n_collected_steps = collect_stats.n_collected_steps
+        n_gradient_steps = round(self.update_per_step * n_collected_steps)
+        if n_gradient_steps == 0:
+            raise ValueError(
+                f"n_gradient_steps is 0, n_collected_steps={n_collected_steps}, "
+                f"update_per_step={self.update_per_step}",
+            )
+        for _ in range(n_gradient_steps):
+            self._gradient_step += 1
+            update_stat = self.policy.update(
+                sample_size=self.batch_size,
+                buffer=self.train_collector.buffer
+            )
+            self._update_moving_avg_stats_and_log_update_data(update_stat)
+
+            # logging
+            self.policy_update_time += update_stat.train_time
+        # Only the last update stat returned, like in Tianshou's version
+        return update_stat
+
+
+class GroupedReplayBuffer(ReplayBuffer):
+    def __init__(self, size: int, **kwargs):
+        super().__init__(size, **kwargs)
+
+        # Maps instr -> list of indices in the buffer
+        self.group_index: Dict[str, List[int]] = defaultdict(list)
+
+        # Reverse mapping: buffer index -> instr
+        self.index_to_instr: np.ndarray = np.full(size, None, dtype=object)
+
+    def add(self, batch: Union[Batch, Dict[str, Any]], buffer_ids: Any = None) -> List[int]:
+        
+        ret = super().add(batch, buffer_ids)
+        if isinstance(ret, tuple) and len(ret) == 4:
+            indices, ep_rew, ep_len, ep_idx = ret
+            return_tuple = (ep_rew, ep_len, ep_idx)
+        else:
+            indices = ret
+            return_tuple = ()
+
+        instrs = batch.obs.instr
+        if isinstance(instrs, (int, str)):
+            instrs = [instrs]
+
+        for i, idx in enumerate(indices):
+            new_instr = instrs[i]
+
+            # Remove the index from the old instr's list (if any)
+            old_instr = self.index_to_instr[idx]
+            if old_instr is not None:
+                try:
+                    self.group_index[old_instr].remove(idx)
+                    if not self.group_index[old_instr]:
+                        del self.group_index[old_instr]  # clean up empty lists
+                except ValueError:
+                    pass
+
+            # Add the new instr -> idx mapping
+            self.group_index[new_instr].append(idx)
+            self.index_to_instr[idx] = new_instr
+
+        if return_tuple:
+            return (indices, *return_tuple)
+        else:
+            return indices
+    
+    def sample_group_id(self, sample_size:int) -> Any:
+        if len(self.group_index) == 0:
+            raise ValueError(f"No samples in the replay buffer.")
+        eligible_keys = [k for k, idxs in self.group_index.items() if len(idxs) > sample_size]
+        return np.random.choice(eligible_keys)
+    
+    def total_group_id(self, group_id:str) -> int:
+        if group_id in self.group_index:
+            return len(self.group_index[group_id])
+        else:
+            return 0
+
+    def sample_group(self, group_id: Any, batch_size: int) -> Batch:
+        """Sample transitions with obs['instr'] == instr."""
+        indices = self.group_index.get(group_id, [])
+        if len(indices) < batch_size:
+            raise ValueError(f"Not enough samples for instr={group_id}: only {len(indices)} available.")
+        chosen = np.random.choice(indices, size=batch_size, replace=False)
+        return self[chosen], indices
+
+    def clear(self) -> None:
+        super().clear()
+        self.group_index.clear()
+        self.index_to_instr[:] = None
