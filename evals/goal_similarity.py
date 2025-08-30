@@ -110,9 +110,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot cosine similarity hist/KDE per goal across multiple layers.")
     parser.add_argument("--model_name", type=str, default="elmo",
                         help="Which model to use to extract embeddings.")
-    parser.add_argument("--config_name", type=str, default="shapes_object_only",
+    parser.add_argument("--config_name", type=str, default="shapes",
                         help="Experiment name which needs to match config file name.")
-    parser.add_argument("--layers", type=int, nargs="+", default=[0],
+    parser.add_argument("--layers", type=int, nargs="+", default=[0, 1],
                         help="List of BERT layers to plot (default: [0, 7, 11]).")
     args = parser.parse_args()
 

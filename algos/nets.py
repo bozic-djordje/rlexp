@@ -60,103 +60,49 @@ def extract_bert_layer_embeddings(embedding_dict: Dict, layer_ind: int) -> Dict:
     return layer_embeddings
 
 
-def _mean_pool_time(x: np.ndarray) -> np.ndarray:
-    # x: (T, D) -> (D,)
-    if x.ndim != 2:
-        raise ValueError(f"Expected 2D token embedding array, got shape {x.shape}")
-    return x.mean(axis=0)
+def _mean_pool(x: np.ndarray, T: int) -> np.ndarray:
+    # x: (Tmax, D), use only first T rows
+    if T <= 0:
+        return np.zeros((x.shape[-1],), dtype=np.float32)
+    return x[:T].mean(axis=0).astype(np.float32)
 
-
-def precompute_elmo_embeddings_tfhub(
-    instructions: List[str],
-    batch_size: int = 256,
-) -> Dict[str, np.ndarray]:
+def precompute_elmo_embeddings_tfhub(instructions: List[str], batch_size: int = 256) -> Dict[str, np.ndarray]:
     """
-    Returns dict: instruction -> (L, 1024) array.
-    - If 'tokens' signature is available: L=3 (word_emb, lstm_outputs1, lstm_outputs2), each mean-pooled over tokens.
-    - If only 'default' signature is available: L=1 (elmo), already sentence-level (1024,).
-      In that case we still return shape (1, 1024) for API consistency.
+    Uses TF-Hub 'elmo/3' with the 'tokens' signature and returns ONLY the two 1024-d contextual layers:
+      dict[instruction] -> (2, 1024) array stacked as [lstm_outputs1, lstm_outputs2].
     """
-    layer = hub.load(ELMO_URL)
+    m = hub.load(ELMO_URL)
+    sigs = getattr(m, "signatures", {})
+    if "tokens" not in sigs:
+        raise RuntimeError("ELMo 'tokens' signature not available. Ensure TF<=2.15 and tensorflow-hub==0.13.0.")
+    f_tokens = sigs["tokens"]
 
-    # Discover signatures safely
-    sigs = {}
-    try:
-        sigs = layer.signatures
-    except Exception:
-        pass
-
-    has_tokens = isinstance(sigs, dict) and ("tokens" in sigs)
-
+    tokenized = [s.strip().split() for s in instructions]
     outputs: Dict[str, np.ndarray] = {}
 
-    if has_tokens:
-        # ---- Path A: tokens signature (preferred; per-token + per-layer) ----
-        f_tokens = sigs["tokens"]  # callable
-        tokenized = [s.strip().split() for s in instructions]
+    for i in tqdm(range(0, len(instructions), batch_size), desc="ELMo(tokens) batching"):
+        batch_tokens = tokenized[i:i + batch_size]
+        lengths = np.array([len(t) for t in batch_tokens], dtype=np.int32)
 
-        for i in tqdm(range(0, len(instructions), batch_size), desc="ELMo tokens batching"):
-            batch_tokens = tokenized[i:i + batch_size]
-            lengths = [len(toks) for toks in batch_tokens]
-
+        # Try ragged first; fall back to dense padded if needed
+        try:
             ragged_tokens = tf.ragged.constant(batch_tokens, dtype=tf.string)
-            lengths_tf = tf.constant(lengths, dtype=tf.int32)
+            out = f_tokens(tokens=ragged_tokens, sequence_len=tf.constant(lengths, dtype=tf.int32))
+        except Exception:
+            max_len = int(lengths.max()) if lengths.size else 0
+            padded = [t + [""] * (max_len - len(t)) for t in batch_tokens]
+            dense_tokens = tf.constant(padded, dtype=tf.string)
+            out = f_tokens(tokens=dense_tokens, sequence_len=tf.constant(lengths, dtype=tf.int32))
 
-            # This returns a dict of tensors; key presence can vary by build.
-            out = f_tokens(tokens=ragged_tokens, sequence_len=lengths_tf)
+        # Extract only contextual layers (B, T, 1024)
+        L1 = out["lstm_outputs1"].numpy()
+        L2 = out["lstm_outputs2"].numpy()
 
-            # Safely fetch available keys
-            def _get(name):  # shape: (B, T, 1024)
-                if name in out:
-                    return out[name].numpy()
-                return None
-
-            word_emb      = _get("word_emb")
-            lstm_outputs1 = _get("lstm_outputs1")
-            lstm_outputs2 = _get("lstm_outputs2")
-            elmo_default  = _get("elmo")  # sometimes present (weighted mix per token)
-
-            for b in range(len(batch_tokens)):
-                layers = []
-                if word_emb is not None:
-                    layers.append(_mean_pool_time(word_emb[b, :lengths[b], :]))
-                if lstm_outputs1 is not None:
-                    layers.append(_mean_pool_time(lstm_outputs1[b, :lengths[b], :]))
-                if lstm_outputs2 is not None:
-                    layers.append(_mean_pool_time(lstm_outputs2[b, :lengths[b], :]))
-
-                # If none of the three layer keys exist, fall back to elmo (per-token) if available
-                if not layers and elmo_default is not None:
-                    layers.append(_mean_pool_time(elmo_default[b, :lengths[b], :]))
-
-                if not layers:
-                    # Absolute fallback: zero vector to keep shapes consistent
-                    layers.append(np.zeros((1024,), dtype=np.float32))
-
-                outputs[instructions[i + b]] = np.stack(layers, axis=0).astype(np.float32)
-
-    else:
-        # ---- Path B: default signature (strings only → sentence embedding) ----
-        # With KerasLayer, calling the layer often returns a dict with key 'elmo' or a tensor [B,1024].
-        # We'll support both.
-        kl = hub.KerasLayer(ELMO_URL, trainable=False)
-        for i in tqdm(range(0, len(instructions), batch_size), desc="ELMo default batching"):
-            batch = instructions[i:i + batch_size]
-            x = tf.constant(batch, dtype=tf.string)
-            y = kl(x)  # may be a dict or a tensor depending on TF/Hub version
-
-            if isinstance(y, dict):
-                if "elmo" in y:
-                    arr = y["elmo"].numpy()  # (B, 1024)
-                else:
-                    # take first value as best effort
-                    arr = next(iter(y.values())).numpy()
-            else:
-                arr = y.numpy()  # (B, 1024)
-
-            for j in range(arr.shape[0]):
-                # wrap as (1, 1024) so API matches the '3-layer' path shape convention
-                outputs[batch[j]] = arr[j][None, :].astype(np.float32)
+        for b, toks in enumerate(batch_tokens):
+            T = int(lengths[b])
+            v1 = _mean_pool(L1[b], T)   # (1024,)
+            v2 = _mean_pool(L2[b], T)   # (1024,)
+            outputs[instructions[i + b]] = np.stack([v1, v2], axis=0).astype(np.float32)  # (2, 1024)
 
     return outputs
 
