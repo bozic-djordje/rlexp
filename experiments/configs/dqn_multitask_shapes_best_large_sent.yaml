@@ -4,7 +4,8 @@
   # Which variables are to be interpreted as Optuna float delimiters
   float_keys: [step_size, update_per_step, phi_update_tau, psi_update_tau, phi_update_ratio]
   log_domain_keys: [step_size]
-  'bert_layer_index': [0, 7, 11]
+  'embedding_model': bert
+  'layer_index': [0, 7, 11]
   'n_trials': 20
   'n_epochs': 14000
   'epoch_steps': 400

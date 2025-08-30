@@ -3,8 +3,7 @@ import numpy as np
 import torch
 import optuna, pickle
 
-from tianshou.data import Collector, ReplayBuffer, PrioritizedReplayBuffer
-from tianshou.trainer import OffpolicyTrainer
+from tianshou.data import Collector
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
@@ -13,7 +12,7 @@ from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, Groupe
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import iterate_hyperparams, setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
-from algos.nets import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree
+from algos.nets import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
 
 
 def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_hparams=None) -> float:
@@ -62,21 +61,42 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
     
     all_instructions = env_factory.get_all_instructions()
 
-    embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
-    if os.path.isfile(embedding_path):
-        precomp_embeddings = torch.load(embedding_path, map_location=device)
+    precomp_model = exp_hparams["embedding_model"]
+    layer_index = exp_hparams["layer_index"]
+
+    if precomp_model in ("BERT", "bert"):
+        embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            precomp_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
+    elif precomp_model in ("ELMO", "elmo"):
+        embedding_path = os.path.join(precomp_path, 'elmo_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            precomp_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            # Must be done on CPU
+            precomp_embeddings_np = precompute_elmo_embeddings_tfhub(all_instructions)
+            precomp_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in precomp_embeddings_np.items()
+            }
     else:
-        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
-        torch.save(precomp_embeddings, embedding_path)
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
+
+    torch.save(precomp_embeddings, embedding_path)
     
-    if "bert_layer_index" in exp_hparams:
-        bert_layer_ind = exp_hparams["bert_layer_index"]
+    if precomp_model in ("BERT", "bert"):
+        if not isinstance(layer_index, list):
+            layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=layer_index)
+        else:
+            layer_embeddings = precomp_embeddings
+    elif precomp_model in ("ELMO", "elmo"):
+        layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings, layer_ind=layer_index)
+        layer_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
+            }
     else:
-        bert_layer_ind = -1
-    if not isinstance(bert_layer_ind, list):
-        layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
-    else:
-        layer_embeddings = precomp_embeddings
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
     
     # TODO: Implement PrioritisedGroupedReplayBuffer to access prioritised memory replay
     rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
@@ -95,7 +115,7 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
         device=device
     )
     
-    if not isinstance(bert_layer_ind, list):
+    if not isinstance(layer_index, list):
         agent = SFBase(
             phi_nn=phi_nn, 
             psi_nn=psi_nn,
@@ -117,12 +137,12 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
             device=device
         )
     else:
-        mix_nn = ScalarMix(len(bert_layer_ind), trainable=True).to(device)
+        mix_nn = ScalarMix(len(layer_index), trainable=True).to(device)
         agent = SFMix(
             phi_nn=phi_nn, 
             psi_nn=psi_nn,
             mix_nn=mix_nn,
-            layers_to_mix=bert_layer_ind,
+            layers_to_mix=layer_index,
             dec_nn=None,
             rb=rb,
             num_skills=len(all_instructions),

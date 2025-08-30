@@ -9,7 +9,7 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.nets import ConcatActionValue, precompute_bert_embeddings, extract_bert_layer_embeddings
+from algos.nets import ConcatActionValue, extract_elmo_layer_embeddings_tfhub, precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub
 from algos.common import EpsilonDecayHook, SaveHook, TestFnHook
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams, iterate_hyperparams
@@ -53,18 +53,43 @@ def experiment(trial: optuna.trial.Trial, store_path: str, config_path: str, exa
     test_env: MultitaskShapes = env_factory.get_env(set_id='TRAIN', purpose='EVAL')
 
     all_instructions = env_factory.get_all_instructions()
-    embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
-    if os.path.isfile(embedding_path):
-        precomp_embeddings = torch.load(embedding_path, map_location=device)
-    else:
-        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
-    torch.save(precomp_embeddings, embedding_path)
+    
+    precomp_model = exp_hparams["embedding_model"]
+    layer_index = exp_hparams["layer_index"]
 
-    if "bert_layer_index" in exp_hparams:
-        bert_layer_ind = exp_hparams["bert_layer_index"]
+    if precomp_model in ("BERT", "bert"):
+        embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            precomp_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
+    elif precomp_model in ("ELMO", "elmo"):
+        embedding_path = os.path.join(precomp_path, 'elmo_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            precomp_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            # Must be done on CPU
+            precomp_embeddings_np = precompute_elmo_embeddings_tfhub(all_instructions)
+            precomp_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in precomp_embeddings_np.items()
+            }
     else:
-        bert_layer_ind = -1
-    layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=bert_layer_ind)
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
+
+    torch.save(precomp_embeddings, embedding_path)
+    
+    if precomp_model in ("BERT", "bert"):
+        if not isinstance(layer_index, list):
+            layer_embeddings = extract_bert_layer_embeddings(embedding_dict=precomp_embeddings, layer_ind=layer_index)
+        else:
+            layer_embeddings = precomp_embeddings
+    elif precomp_model in ("ELMO", "elmo"):
+        layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings, layer_ind=layer_index)
+        layer_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
+            }
+    else:
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
 
     feat_dim = train_env.observation_space["features"].shape[0]
     emb_dim = layer_embeddings[next(iter(layer_embeddings))].shape[0]

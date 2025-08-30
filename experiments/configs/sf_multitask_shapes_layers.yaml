@@ -1,7 +1,9 @@
 'general':
   'seed': 1
 'experiment':
-  'bert_layer_index': [[0, 7, 8, 11], 0, 7, 8, 11]
+  'embedding_model': bert
+  # [0, 7, 8, 11]
+  'layer_index': [[0, 7, 8, 11], 0, 7, 8, 11]
   'n_trials': 20
   'n_epochs': 14000
   'epoch_steps': 400

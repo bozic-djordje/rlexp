@@ -1,15 +1,17 @@
 'general':
   'seed': 1
 'experiment':
-  'embedding_model': bert
-  'layer_index': 0
+  float_keys: [step_size, update_per_step, phi_update_tau, psi_update_tau, phi_update_ratio]
+  log_domain_keys: [step_size]
+  'embedding_model': elmo
+  'layer_index': [0, 1]
   'n_trials': 20
   'n_epochs': 14000
   'epoch_steps': 400
   'warmup_steps': 2000
   'step_per_collect': 400
   'update_per_step': 0.05756426583707797
-  'hidden_dim': [4096, 2048, 768]
+  'hidden_dim': [4096, 2048, 1024]
   'lr': 1.0e-05
   'phi_lr': 0.0001
   'psi_lr': 1.0e-05

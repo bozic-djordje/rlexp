@@ -108,22 +108,41 @@ def precompute_elmo_embeddings_tfhub(instructions: List[str], batch_size: int = 
 
 
 def extract_elmo_layer_embeddings_tfhub(
-    embedding_dict: Dict[str, np.ndarray],
+    embedding_dict: Dict[str, "np.ndarray | 'torch.Tensor'"],
     layer_ind: int
 ) -> Dict[str, np.ndarray]:
-    """
-    Select a single ELMo layer from the precomputed dict.
-    layer_ind ∈ {0,1,2} if tokens-signature path; ∈ {0} if default-signature (only one layer).
-    Returns: dict[instruction] -> (1024,) array
-    """
-    result = {}
+    
+    result: Dict[str, np.ndarray] = {}
+
     for instr, emb in embedding_dict.items():
-        if emb.ndim != 2:
-            raise ValueError(f"Expected (L,1024) array, got shape {emb.shape} for '{instr}'")
-        L = emb.shape[0]
-        if layer_ind >= L:
-            raise ValueError(f"Requested layer {layer_ind} but only {L} layer(s) available for '{instr}'.")
-        result[instr] = emb[layer_ind, :].copy()
+        # Convert torch.Tensor -> numpy
+        if isinstance(emb, torch.Tensor):
+            if emb.ndim != 2:
+                raise ValueError(f"Expected 2D tensor for '{instr}', got shape {tuple(emb.shape)}")
+            L = emb.shape[0]
+            if layer_ind >= L:
+                raise ValueError(f"Requested layer {layer_ind} but only {L} layer(s) available for '{instr}'.")
+            # select on tensor, then move to CPU and convert
+            vec = emb[layer_ind].detach().to("cpu").numpy().astype(np.float32, copy=False)
+            result[instr] = vec
+            continue
+
+        # Handle numpy arrays
+        if isinstance(emb, np.ndarray):
+            if emb.ndim != 2:
+                raise ValueError(f"Expected (L, D) ndarray for '{instr}', got shape {emb.shape}")
+            L = emb.shape[0]
+            if layer_ind >= L:
+                raise ValueError(f"Requested layer {layer_ind} but only {L} layer(s) available for '{instr}'.")
+            vec = emb[layer_ind, :].astype(np.float32, copy=False)
+            result[instr] = vec
+            continue
+
+        # Unknown type
+        raise TypeError(
+            f"Value for '{instr}' must be a numpy.ndarray or torch.Tensor; got {type(emb)}"
+        )
+
     return result
 
 
