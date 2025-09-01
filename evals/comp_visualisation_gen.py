@@ -9,6 +9,20 @@ import matplotlib.pyplot as plt
 METRICS_ORDER = ["return", "steps", "goal_first"]
 DPI = 150
 
+# Predefined distinct base colors for up to ~10 models
+MODEL_BASE_COLORS = [
+    "#1f77b4",  # blue
+    "#d62728",  # red
+    "#2ca02c",  # green
+    "#ff7f0e",  # orange
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # gray
+    "#bcbd22",  # olive
+    "#17becf",  # cyan
+]
+
 def load_data(path: str) -> Dict[str, Dict[str, Dict[str, float]]]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -77,7 +91,9 @@ def plot_grouped_bars(
     for mi, model in enumerate(models):
         heights = data_matrix[mi]
         y = np.nan_to_num(heights, nan=0.0)
-        plt.bar(x + offsets[mi], y, width=bar_width, label=model)
+        model_id = model.split("_")[0]
+        color = MODEL_BASE_COLORS[mi % len(MODEL_BASE_COLORS)]  # one base color per model
+        plt.bar(x + offsets[mi], y, width=bar_width, label=model_id, color=color)
 
     plt.xticks(x, instructions, rotation=15, ha="right")
     plt.xlabel("Instruction")

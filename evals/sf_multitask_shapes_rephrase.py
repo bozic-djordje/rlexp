@@ -5,15 +5,16 @@ import numpy as np
 import torch
 
 from tianshou.data import Batch
-from tianshou.policy import DQNPolicy
 
+from algos.common import GroupedReplayBuffer
 from algos.sf_multitask import SFBase
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory, generate_instruction, create_synonyms, create_all_synonyms
 from utils import setup_eval_paths, update_json_file
 from yaml_utils import load_yaml
 from algos.nets import (
-    ConcatActionValue,
     extract_bert_layer_embeddings,
+    FCTrunk,
+    FCTree,
     extract_elmo_layer_embeddings_tfhub,
     precompute_bert_embeddings,
     precompute_elmo_embeddings_tfhub,
@@ -45,7 +46,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: Dict, synonyms: Dict, te
 
             done = False
             while not done:
-                a_batch: Batch = agent(Batch(obs=[obs], info=[]))
+                a_batch: Batch = agent.forward_cos(Batch(obs=[obs]), state={})
                 action_id = a_batch.act.item()
                 next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
                 obs = next_obs
@@ -109,6 +110,7 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
 
     env_factory = ShapesAttrCombFactory(hparams=env_hparams, store_path=store_path)
     dummy_env = env_factory.get_env(set_id="TRAIN", purpose="EVAL")
+    all_instructions = env_factory.get_all_instructions()
 
     _, synonyms_list = create_all_synonyms(
         goal_list=dummy_env.goal_list,
@@ -117,49 +119,77 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
         use_features=env_hparams["use_features"])
 
     if precomp_model in ("BERT", "bert"):
-        precomp_embeddings = precompute_bert_embeddings(synonyms_list, device=device)
-        
+        precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
+        precomp_embeddings_hack = precompute_bert_embeddings(synonyms_list, device=device)
     elif precomp_model in ("ELMO", "elmo"):
-        precomp_embeddings_np = precompute_elmo_embeddings_tfhub(synonyms_list)
+        precomp_embeddings_np = precompute_elmo_embeddings_tfhub(all_instructions)
         precomp_embeddings = {
             instr: torch.from_numpy(arr).to(device).float() for instr, arr in precomp_embeddings_np.items()
+        }
+        precomp_embeddings_np_hack = precompute_elmo_embeddings_tfhub(synonyms_list)
+        precomp_embeddings_hack = {
+            instr: torch.from_numpy(arr).to(device).float() for instr, arr in precomp_embeddings_np_hack.items()
         }
     else:
         raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
     
     if precomp_model in ("BERT", "bert"): 
         layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=layer_index)
+        layer_embeddings_hack = extract_bert_layer_embeddings(precomp_embeddings_hack, layer_ind=layer_index)
     elif precomp_model in ("ELMO", "elmo"):
         layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings, layer_ind=layer_index)
         layer_embeddings = {
                 instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
             }
+        layer_embeddings_np_hack = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings_hack, layer_ind=layer_index)
+        layer_embeddings_hack = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np_hack.items()
+            }
 
 
-    emb_dim = layer_embeddings[next(iter(layer_embeddings))].shape[0]
-    feat_dim = dummy_env.observation_space["features"].shape[0]
-    in_dim = feat_dim + emb_dim
-
-    nnet = ConcatActionValue(
-        in_dim=in_dim,
-        num_actions=int(dummy_env.action_space.n),
-        h=exp_hparams["hidden_dim"],
-        precom_embeddings=layer_embeddings,
+    phi_nn = FCTree(
+        in_dim=dummy_env.observation_space["features"].shape,
+        num_heads=dummy_env.action_space.n,
+        h_trunk=exp_hparams["phi_trunk_dim"],
+        h_head=exp_hparams["phi_head_dim"],
         device=device
     )
-    optim = torch.optim.Adam(nnet.parameters(), lr=exp_hparams["lr"])
 
-    agent = DQNPolicy(
-        model=nnet,
-        optim=optim,
-        is_double=False,
+    psi_nn = FCTrunk(
+        in_dim=exp_hparams["phi_head_dim"][-1] if isinstance(exp_hparams["phi_head_dim"], list) else exp_hparams["phi_head_dim"],
+        h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
+        device=device
+    )
+    
+    # TODO: Implement PrioritisedGroupedReplayBuffer to access prioritised memory replay
+    rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
+    
+    agent = SFBase(
+        phi_nn=phi_nn, 
+        psi_nn=psi_nn,
+        dec_nn=None,
+        rb=rb,
+        num_skills=len(all_instructions),
         action_space=dummy_env.action_space,
-        discount_factor=env_hparams["disc_fact"],
-        target_update_freq=exp_hparams["target_update_steps"]
+        precomp_embeddings=layer_embeddings,
+        l2_freq_scaling=exp_hparams["l2_freq_scaling"],
+        phi_lr=exp_hparams["phi_lr"],
+        psi_lr=exp_hparams["psi_lr"],
+        psi_lambda=exp_hparams["psi_lambda"],
+        phi_lambda=exp_hparams["phi_lambda"],
+        psi_update_tau=exp_hparams["psi_update_tau"],
+        phi_update_tau=exp_hparams["phi_update_tau"],
+        phi_update_ratio=exp_hparams["phi_update_ratio"],
+        gamma=env_hparams["disc_fact"],
+        seed=base_seed,
+        device=device
     )
     agent.load_state_dict(torch.load(model_path, map_location=device))
     agent.eval()
     agent.set_eps(exp_hparams["test_epsilon"])
+
+    # TODO: Extremely hacky!
+    agent.psi_nn.precomp_embed = layer_embeddings_hack
 
     # free dummy env now that specs are captured
     dummy_env.close()
@@ -204,7 +234,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="dqn_multitask_shapes_best_large_20250830_184952",
+        default="sf_multitask_shapes_best_large_20250831_012012",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
@@ -228,7 +258,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--store_name",
         type=str,
-        default="shapes_result_comp_rephrase_bert",
+        default="shapes_result_comp_rephrase",
         help="Name of the json file where results should be written. If file doesnt exist it will be created.",
     )
     parser.add_argument(

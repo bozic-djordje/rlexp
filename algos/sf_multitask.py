@@ -54,24 +54,28 @@ class MultiparamModule(nn.Module):
         
         self._key_map = {}
         self._keys = set({})
+
+    def get_cosine_closest_key(self, key:str):
+        keys = []
+        ws = []
+        for k in self._keys:
+            keys.append(k)
+            ws.append(self.precomp_embed[k])
+        
+        existing_ws = torch.stack(ws)
+        new_w = self.precomp_embed[key]
+
+        cos_sims = torch.matmul(existing_ws, new_w)
+        top_ind = torch.argmax(cos_sims)
+        top_key = keys[top_ind]
+        return top_key
     
     def _check_add_key(self, key:str) -> None:
         if key in self._keys:
             return
         
         if self.init_from_closest and len(self._keys) > 0:
-            keys = []
-            ws = []
-            for k in self._keys:
-                keys.append(k)
-                ws.append(self.precomp_embed[k])
-            
-            existing_ws = torch.stack(ws)
-            new_w = self.precomp_embed[key]
-
-            cos_sims = torch.matmul(existing_ws, new_w)
-            top_ind = torch.argmax(cos_sims)
-            top_key = keys[top_ind]
+            top_key = self.get_cosine_closest_key(key=key)
         else:
             top_key = None
 
@@ -323,32 +327,59 @@ class SFBase(BasePolicy):
         return Batch(act=act, state=state, dist=dist)
     
     def forward_gpi(self, batch, state, **kwargs):
-        num_skills = len(self.psi_nn.keys)
-        numerical_features = batch.obs.features
-        # Retrieve embeddings for instructions
-        w = self.instr_to_embedding(instrs=batch.obs.instr)
-        w = w.repeat(num_skills, 1)
-        
-        # shape: (batch_dim, num_actions, embedding_dim)
-        phi_sa = self.phi_nn(numerical_features)
-        _, num_actions, _ = phi_sa.shape
-        
-        phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
-        # Does inference with all task policies: num_a x num_skills list
-        psi_all = torch.stack([self.psi_nn.forward(chunk.squeeze(1), {}) for chunk in phi_a], dim=0)
-        # Now transpose to (num_skills, num_a, feat_dim)
-        psi_all = psi_all.transpose(0, 1)
-        
-        # (num_skills, num_a)
-        q_logits = torch.bmm(psi_all, w.unsqueeze(2)).squeeze(2)
-        # Best action per skill and its value
-        skill_best_vals, skill_best_actions = q_logits.max(dim=1)
-        # Choose the skill whose best value is globally maximal
-        best_skill = skill_best_vals.argmax()
-        # Global best action across all skills
-        single_a = skill_best_actions[best_skill] 
+        with torch.no_grad():
+            num_skills = len(self.psi_nn.keys)
+            numerical_features = batch.obs.features
+            # Retrieve embeddings for instructions
+            w = self.instr_to_embedding(instrs=batch.obs.instr)
+            w = w.repeat(num_skills, 1)
+            
+            # shape: (batch_dim, num_actions, embedding_dim)
+            phi_sa = self.phi_nn(numerical_features)
+            _, num_actions, _ = phi_sa.shape
+            
+            phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+            # Does inference with all task policies: num_a x num_skills list
+            psi_all = torch.stack([self.psi_nn.forward(chunk.squeeze(1), {}) for chunk in phi_a], dim=0)
+            # Now transpose to (num_skills, num_a, feat_dim)
+            psi_all = psi_all.transpose(0, 1)
+            
+            # (num_skills, num_a)
+            q_logits = torch.bmm(psi_all, w.unsqueeze(2)).squeeze(2)
+            # Best action per skill and its value
+            skill_best_vals, skill_best_actions = q_logits.max(dim=1)
+            # Choose the skill whose best value is globally maximal
+            best_skill = skill_best_vals.argmax()
+            # Global best action across all skills
+            single_a = skill_best_actions[best_skill] 
         return Batch(act=single_a, state=state)
     
+    # TODO: This could be the same method as regular forward as identity will have the highest cosine similarity!
+    def forward_cos(self, batch, state, **kwargs):
+        with torch.no_grad():
+            numerical_features = batch.obs.features
+            # Retrieve embeddings for instructions
+            closest_key = self.psi_nn.get_cosine_closest_key(key=batch.obs.instr[0])
+            w = self.instr_to_embedding(instrs=[closest_key])
+            
+            # shape: (batch_dim, num_actions, embedding_dim)
+            phi_sa = self.phi_nn(numerical_features)
+            _, num_actions, _ = phi_sa.shape
+            
+            phi_a = torch.chunk(phi_sa, chunks=num_actions, dim=1)
+            st = {"key": str(closest_key)}
+            
+            psi_a = [self.psi_nn.forward(chunk.squeeze(1), st).unsqueeze(1) for chunk in phi_a]
+            # shape: (batch_dim, num_actions, embedding_dim)
+            psi = torch.cat(psi_a, dim=1)
+
+            # shape: (batch_dim, num_actions)
+            q_logits = torch.bmm(psi, w.unsqueeze(2)).squeeze(2)
+            dist = Categorical(logits=q_logits)
+            act = argmax_random_tiebreak(q_logits)
+            act = dist.sample()
+        return Batch(act=act, state=state)
+
     def psi_update(self, batch: Batch) -> Tuple[float, Tuple]:
         batch_size = len(batch)
         if not isinstance(batch.terminated, torch.Tensor):

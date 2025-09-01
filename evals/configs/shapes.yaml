@@ -23,28 +23,28 @@ features:
   colour: [red, blue, green, yellow]
 
 synonyms:
-  ball: [sphere, circle]
-  triangle: [triad, ternion]
-  square: [rectangle, quadrilateral]
-  diamond: [gem, jewel]
-  star: [sun, celestial]
-  key: [unlocker, passkey]
-  red: [scarlet, ruby, crimson, vermilion]
-  blue: [navy, cobalt, sapphire, cerulean]
-  green: [verdant, jade, olive, lime]
-  yellow: [golden, canary, lemon, ochre]
+  ball: [ball, sphere, circle]
+  triangle: [triangle, triad, ternion]
+  square: [square, rectangle, quadrilateral]
+  diamond: [diamond, gem, jewel]
+  star: [star, sun, celestial]
+  key: [key, unlocker, passkey]
+  red: [red, scarlet, ruby, crimson, vermilion]
+  blue: [blue, navy, cobalt, sapphire, cerulean]
+  green: [green, verdant, jade, olive, lime]
+  yellow: [yellow, golden, canary, lemon, ochre]
 
 
 task_names: [go_to, go_to_easy, pick_up, retrieve]
 task_id: go_to 
 
 go_to:
+  - colour shape
   - Go to colour shape.
   - Reach colour shape.
   - Move forward to colour shape.
   - Head over to colour shape.
   - Navigate to colour shape.
-  - colour shape.
 
 go_to_easy:
   - Go to colour shape.

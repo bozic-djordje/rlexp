@@ -36,12 +36,17 @@ def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
         return sentence
 
 
-def create_all_synonyms(env, synonyms: Dict) -> Dict: 
+def create_all_synonyms(synonyms: Dict, env=None, templates=None, use_features=None, goal_list=None) -> Dict: 
     synonyms_dict = defaultdict(set) 
+    if env is not None:
+        templates = env._instr_templates
+        use_features = env._features.keys()
+        goal_list = env.goal_list
+
     synonyms_list = set() 
-    for goal in env.goal_list: 
+    for goal in goal_list: 
         goal_tuple = (goal['colour'], goal['shape'])
-        goal_synonyms = create_synonyms(goal=goal, templates=env._instr_templates, use_features=env._features.keys(), synonyms=synonyms)
+        goal_synonyms = create_synonyms(goal=goal, templates=templates, use_features=use_features, synonyms=synonyms)
         synonyms_dict[goal_tuple] = synonyms_dict[goal_tuple].union(goal_synonyms) 
         synonyms_list = synonyms_list.union(goal_synonyms) 
     return synonyms_dict, list(synonyms_list)
