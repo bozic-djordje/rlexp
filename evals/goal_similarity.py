@@ -1,7 +1,7 @@
 import re
 import os
 from copy import deepcopy
-from typing import List, Dict, Tuple
+from typing import List, Dict, Set, Tuple
 from collections import defaultdict
 
 import numpy as np
@@ -9,7 +9,7 @@ import torch
 import matplotlib.pyplot as plt
 
 from algos.nets import extract_bert_layer_embeddings, precompute_bert_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
-from envs.shapes.multitask_shapes import MultitaskShapes, generate_instruction, ShapesAttrCombFactory
+from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory, create_all_synonyms
 from utils import setup_artefact_paths
 from tqdm import tqdm
 
@@ -85,24 +85,6 @@ def plot_layer_panels(
     plt.close(fig)
 
 
-def create_synonyms(env, goals: List, synonyms: Dict) -> Dict: 
-    synonyms_dict = defaultdict(set) 
-    synonyms_list = set() 
-    for goal in goals: 
-        goal_tuple = (goal['colour'], goal['shape'])
-        for template in env._instr_templates:
-            instr = generate_instruction(instr=deepcopy(template), goal=deepcopy(goal), all_feature_keys=env._features.keys())
-            for keyword, synonyms in hparams["synonyms"].items():
-                if keyword in instr: 
-                    instr_2 = deepcopy(instr)
-                    for synonym in synonyms: 
-                        instr_3 = deepcopy(instr_2) 
-                        final_instr = instr_3.replace(keyword, synonym) 
-                        synonyms_dict[goal_tuple].add(final_instr) 
-                        synonyms_list.add(final_instr) 
-    return synonyms_dict, list(synonyms_list)
-
-
 if __name__ == "__main__":
     import argparse
     import yaml
@@ -129,7 +111,7 @@ if __name__ == "__main__":
     env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
 
     # Build synonyms per goal
-    synonyms_dict, synonyms_list = create_synonyms(env=env, goals=env.goal_list, synonyms=hparams["synonyms"])
+    synonyms_dict, synonyms_list = create_all_synonyms(env=env, synonyms=hparams["synonyms"])
 
     # Paths
     precomp_path = os.path.join(store_path, 'precomputed')

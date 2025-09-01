@@ -14,6 +14,7 @@ from algos.nets import (
     extract_bert_layer_embeddings,
     FCTrunk,
     FCTree,
+    extract_elmo_layer_embeddings_tfhub,
 )
 
 
@@ -88,12 +89,25 @@ def evaluation(store_path:str, model_path:str, config_path:str, precomp_path:str
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[EVAL] Using device: {device}")
+
+    precomp_model = exp_hparams["embedding_model"]
+    layer_index = exp_hparams["layer_index"]
+
+    if precomp_model in ("BERT", "bert"):
+        embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+    elif precomp_model in ("ELMO", "elmo"):
+        embedding_path = os.path.join(precomp_path, 'elmo_embeddings.pt')
+    else:
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.") 
     
-    embedding_path = os.path.join(precomp_path, "bert_embeddings.pt")
     precomp_embeddings = torch.load(embedding_path, map_location=device)
-    
-    bert_layer_ind = exp_hparams.get("bert_layer_index", -1)
-    layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=bert_layer_ind)
+    if precomp_model in ("BERT", "bert"): 
+        layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=layer_index)
+    elif precomp_model in ("ELMO", "elmo"):
+        layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings, layer_ind=layer_index)
+        layer_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
+            }
 
     env_factory = ShapesAttrCombFactory(hparams=env_hparams, store_path=store_path)
     dummy_env = env_factory.get_env(set_id="TRAIN", purpose="EVAL")

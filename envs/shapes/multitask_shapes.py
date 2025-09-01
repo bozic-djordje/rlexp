@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from itertools import product
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import os
 import numpy as np
 import gymnasium as gym
@@ -8,7 +9,7 @@ from gymnasium import spaces
 import random
 import re
 from copy import deepcopy
-from envs.shapes.shapes import Shapes, ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
+from envs.shapes.shapes import ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
 
 
 def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
@@ -33,6 +34,31 @@ def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
             sentence += tok
 
         return sentence
+
+
+def create_all_synonyms(env, synonyms: Dict) -> Dict: 
+    synonyms_dict = defaultdict(set) 
+    synonyms_list = set() 
+    for goal in env.goal_list: 
+        goal_tuple = (goal['colour'], goal['shape'])
+        goal_synonyms = create_synonyms(goal=goal, templates=env._instr_templates, use_features=env._features.keys(), synonyms=synonyms)
+        synonyms_dict[goal_tuple] = synonyms_dict[goal_tuple].union(goal_synonyms) 
+        synonyms_list = synonyms_list.union(goal_synonyms) 
+    return synonyms_dict, list(synonyms_list)
+
+
+def create_synonyms(goal: Dict, templates: List, synonyms: Dict, use_features: Set) -> Dict: 
+    goal_synonyms = set([])
+    for template in templates:
+        instr = generate_instruction(instr=deepcopy(template), goal=deepcopy(goal), all_feature_keys=use_features)
+        for keyword, feature_synonyms in synonyms.items():
+            if keyword in instr: 
+                instr_2 = deepcopy(instr)
+                for synonym in feature_synonyms: 
+                    instr_3 = deepcopy(instr_2) 
+                    final_instr = instr_3.replace(keyword, synonym)  
+                    goal_synonyms.add(final_instr)
+    return list(goal_synonyms)
 
 
 class MultitaskShapes(gym.Env):
