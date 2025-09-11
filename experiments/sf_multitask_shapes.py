@@ -13,7 +13,7 @@ from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import iterate_hyperparams, setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
 from algos.nets import ScalarMix, FCTrunk, FCTree
-from algos.embedding_ops import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
+from algos.embedding_ops import precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub, precompute_rand_embeddings
 
 
 def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_hparams=None) -> float:
@@ -81,6 +81,22 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
             precomp_embeddings = {
                 instr: torch.from_numpy(arr).to(device).float() for instr, arr in precomp_embeddings_np.items()
             }
+    elif precomp_model in ("anisotropic", "ANISOTROPIC"):
+        embedding_path = os.path.join(precomp_path, 'anisotropic_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            layer_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
+            bert_layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=layer_index)
+            layer_embeddings = precompute_rand_embeddings(instructions=all_instructions, anisotropic=True, reference_layer=bert_layer_embeddings, device=device)
+    elif precomp_model in ("isotropic", "ISOTROPIC"):
+        embedding_path = os.path.join(precomp_path, 'anisotropic_embeddings.pt')
+        if os.path.isfile(embedding_path) and trial is not None:
+            layer_embeddings = torch.load(embedding_path, map_location=device)
+        else:
+            precomp_embeddings = precompute_bert_embeddings(all_instructions, device=device)
+            bert_layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=layer_index)
+            layer_embeddings = precompute_rand_embeddings(instructions=all_instructions, anisotropic=False, reference_layer=bert_layer_embeddings, device=device)
     else:
         raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
 
@@ -96,6 +112,8 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
         layer_embeddings = {
                 instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
             }
+    elif precomp_model in ("anisotropic", "ANISOTROPIC", "isotropic", "ISOTROPIC"):
+        pass
     else:
         raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.")
     

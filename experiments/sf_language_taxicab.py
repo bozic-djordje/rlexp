@@ -14,7 +14,7 @@ from envs.taxicab.language_taxicab import LanguageTaxicab, LanguageTaxicabFactor
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
 from algos.nets import FCMultiHead, FCTrunk
-from algos.embedding_ops import precompute_bert_embeddings, extract_bert_layer_embeddings, FCMultiHead, FCTrunk
+from algos.embedding_ops import precompute_bert_embeddings, extract_bert_layer_embeddings
 
 
 def experiment(trial: optuna.trial.Trial, store_path:str, config_path:str) -> float:
