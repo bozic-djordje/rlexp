@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from algos.nets import extract_bert_layer_embeddings, precompute_bert_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
+from algos.embedding_ops import extract_bert_layer_embeddings, precompute_bert_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory, create_all_synonyms
 from utils import setup_artefact_paths
 from tqdm import tqdm

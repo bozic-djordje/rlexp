@@ -747,7 +747,8 @@ if __name__ == '__main__':
     from tianshou.data import Collector, ReplayBuffer
     from algos.common import EpsilonDecayHook, SaveHook, SFTrainer, BetaAnnealHook, CompositeHook
     from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
-    from algos.nets import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree, ScalarMix
+    from algos.nets import FCTrunk, FCTree, ScalarMix
+    from algos.embedding_ops import precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree, ScalarMix
     
     torch.autograd.set_detect_anomaly(True)
 

@@ -12,9 +12,12 @@ from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory,
 from utils import setup_eval_paths, update_json_file
 from yaml_utils import load_yaml
 from algos.nets import (
-    extract_bert_layer_embeddings,
     FCTrunk,
     FCTree,
+)
+
+from algos.embedding_ops import (
+    extract_bert_layer_embeddings,
     extract_elmo_layer_embeddings_tfhub,
     precompute_bert_embeddings,
     precompute_elmo_embeddings_tfhub,

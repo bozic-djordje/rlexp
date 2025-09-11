@@ -12,7 +12,8 @@ from algos.common import BetaAnnealHook, CompositeHook, EpsilonDecayHook, Groupe
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import iterate_hyperparams, setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams
 from yaml_utils import load_yaml, save_yaml
-from algos.nets import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, FCTrunk, FCTree, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
+from algos.nets import ScalarMix, FCTrunk, FCTree
+from algos.embedding_ops import ScalarMix, precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub, extract_elmo_layer_embeddings_tfhub
 
 
 def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_hparams=None) -> float:

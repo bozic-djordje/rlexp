@@ -8,7 +8,8 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.nets import FCActionValue, precompute_bert_embeddings, extract_bert_layer_embeddings
+from algos.nets import FCActionValue
+from algos.embedding_ops import precompute_bert_embeddings, extract_bert_layer_embeddings
 from algos.common import EpsilonDecayHook, SaveHook
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesPositionFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams

@@ -11,8 +11,8 @@ from algos.sf_multitask import SFBase
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory, generate_instruction, create_synonyms, create_all_synonyms
 from utils import setup_eval_paths, update_json_file
 from yaml_utils import load_yaml
-from algos.nets import (
-    ConcatActionValue,
+from algos.nets import ConcatActionValue
+from algos.embedding_ops import (
     extract_bert_layer_embeddings,
     extract_elmo_layer_embeddings_tfhub,
     precompute_bert_embeddings,

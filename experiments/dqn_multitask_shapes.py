@@ -9,7 +9,8 @@ from tianshou.trainer import OffpolicyTrainer
 from torch.utils.tensorboard import SummaryWriter
 from tianshou.utils import TensorboardLogger
 
-from algos.nets import ConcatActionValue, extract_elmo_layer_embeddings_tfhub, precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub
+from algos.nets import ConcatActionValue
+from algos.embedding_ops import extract_elmo_layer_embeddings_tfhub, precompute_bert_embeddings, extract_bert_layer_embeddings, precompute_elmo_embeddings_tfhub
 from algos.common import EpsilonDecayHook, SaveHook, TestFnHook
 from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
 from utils import setup_artefact_paths, setup_experiment, setup_study, sample_hyperparams, iterate_hyperparams
