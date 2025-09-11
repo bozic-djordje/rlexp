@@ -49,6 +49,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: Dict, synonyms: Dict, te
                 action_id = a_batch.act.item()
                 next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
                 obs = next_obs
+                obs["instr"] = instruction
                 done = terminated or truncated
                 
                 ret += reward
@@ -89,7 +90,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: Dict, synonyms: Dict, te
     return skill_stats
                 
 
-def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:str, n_seeds:int=10) -> None:
+def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:str, precomp_path:str, n_seeds:int=10) -> None:
 
     with open(config_path, "r") as f:
         hparams = load_yaml(f)
@@ -115,6 +116,15 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
         templates=rephrase_hparams[env_hparams["task_id"]], 
         synonyms=rephrase_hparams["synonyms"],
         use_features=env_hparams["use_features"])
+    
+    if precomp_model in ("BERT", "bert"):
+        embedding_path = os.path.join(precomp_path, 'bert_embeddings.pt')
+    elif precomp_model in ("ELMO", "elmo"):
+        embedding_path = os.path.join(precomp_path, 'elmo_embeddings.pt')
+    else:
+        raise ValueError(f"Model {precomp_model} not recognised. Must be either bert or elmo.") 
+    
+    loaded_embeddings = torch.load(embedding_path, map_location=device)
 
     if precomp_model in ("BERT", "bert"):
         precomp_embeddings = precompute_bert_embeddings(synonyms_list, device=device)
@@ -129,12 +139,20 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
     
     if precomp_model in ("BERT", "bert"): 
         layer_embeddings = extract_bert_layer_embeddings(precomp_embeddings, layer_ind=layer_index)
+        loaded_layer_embeddings = extract_bert_layer_embeddings(loaded_embeddings, layer_ind=layer_index)
     elif precomp_model in ("ELMO", "elmo"):
         layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=precomp_embeddings, layer_ind=layer_index)
         layer_embeddings = {
                 instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np.items()
             }
-
+        loaded_layer_embeddings_np = extract_elmo_layer_embeddings_tfhub(embedding_dict=loaded_embeddings, layer_ind=layer_index)
+        loaded_layer_embeddings = {
+                instr: torch.from_numpy(arr).to(device).float() for instr, arr in loaded_layer_embeddings_np.items()
+            }
+    
+    for instr, _ in layer_embeddings.items():
+        if instr in loaded_layer_embeddings:
+            layer_embeddings[instr] = loaded_layer_embeddings[instr]
 
     emb_dim = layer_embeddings[next(iter(layer_embeddings))].shape[0]
     feat_dim = dummy_env.observation_space["features"].shape[0]
@@ -160,6 +178,8 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
     agent.load_state_dict(torch.load(model_path, map_location=device))
     agent.eval()
     agent.set_eps(exp_hparams["test_epsilon"])
+
+    agent.model.precomp_embed = layer_embeddings
 
     # free dummy env now that specs are captured
     dummy_env.close()
@@ -254,7 +274,8 @@ if __name__ == "__main__":
         model_path=model_path,
         config_path=config_path,
         n_seeds=args.n_seeds,
-        rephrase_path=rephrase_config
+        rephrase_path=rephrase_config,
+        precomp_path=precomp_path
     )
 
     results_pth = os.path.join(store_path, f"{args.store_name}.json")

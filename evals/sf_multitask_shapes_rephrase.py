@@ -50,6 +50,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: Dict, synonyms: Dict, te
                 action_id = a_batch.act.item()
                 next_obs, reward, terminated, truncated, info = eval_env.step(action_id)
                 obs = next_obs
+                obs["instr"] = instruction
                 done = terminated or truncated
                 
                 ret += reward
@@ -90,7 +91,7 @@ def evaluate_single_seed(*, agent: SFBase, env_hparams: Dict, synonyms: Dict, te
     return skill_stats
                 
 
-def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:str, n_seeds:int=10) -> None:
+def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:str, precomp_path:str, n_seeds:int=10) -> None:
 
     with open(config_path, "r") as f:
         hparams = load_yaml(f)
@@ -146,6 +147,10 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
                 instr: torch.from_numpy(arr).to(device).float() for instr, arr in layer_embeddings_np_hack.items()
             }
 
+    layer_embeddings_postfix = copy.deepcopy(layer_embeddings_hack)
+    for instr, _ in layer_embeddings_postfix.items():
+        if instr in layer_embeddings:
+            layer_embeddings_postfix[instr] = layer_embeddings[instr]
 
     phi_nn = FCTree(
         in_dim=dummy_env.observation_space["features"].shape,
@@ -189,7 +194,7 @@ def evaluation(store_path:str, model_path:str, config_path:str, rephrase_path:st
     agent.set_eps(exp_hparams["test_epsilon"])
 
     # TODO: Extremely hacky!
-    agent.psi_nn.precomp_embed = layer_embeddings_hack
+    agent.psi_nn.precomp_embed = layer_embeddings_postfix
 
     # free dummy env now that specs are captured
     dummy_env.close()
@@ -258,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--store_name",
         type=str,
-        default="shapes_result_comp_rephrase",
+        default="shapes_result_comp_rephrase_bert",
         help="Name of the json file where results should be written. If file doesnt exist it will be created.",
     )
     parser.add_argument(
@@ -284,7 +289,8 @@ if __name__ == "__main__":
         model_path=model_path,
         config_path=config_path,
         n_seeds=args.n_seeds,
-        rephrase_path=rephrase_config
+        rephrase_path=rephrase_config,
+        precomp_path=precomp_path
     )
 
     results_pth = os.path.join(store_path, f"{args.store_name}.json")
