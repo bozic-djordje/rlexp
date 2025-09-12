@@ -175,7 +175,7 @@ if __name__ == "__main__":
         "--run_id",
         type=str,
         # dqn_multitask_shapes_best_large_20250828_120149
-        default="dqn_multitask_shapes_best_large_20250830_211616",
+        default="dqn_multitask_shapes_best_large_20250830_184952",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_seeds",
         type=int,
-        default=10,
+        default=5,
         help="Number of random seeds to evaluate (default: 10).",
     )
     parser.add_argument(
@@ -199,13 +199,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--set_id",
         type=str,
-        default="TRAIN",
+        default="HOLDOUT",
         help="Whether to evaluate on the TRAIN or HOLDOUT set.",
     )
     parser.add_argument(
         "--store_name",
         type=str,
-        default="shapes_result_comp_train_debug",
+        default="sf_vs_dqn_best_model_holdout",
         help="Name of the json file where results should be written. If file doesnt exist it will be created.",
     )
     

@@ -201,7 +201,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="sf_multitask_shapes_best_large_20250827_214351",
+        default="sf_multitask_shapes_best_large_20250831_012012",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_seeds",
         type=int,
-        default=10,
+        default=5,
         help="Number of random seeds to evaluate (default: 10).",
     )
     parser.add_argument(
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--store_name",
         type=str,
-        default="shapes_result_comp_eval",
+        default="sf_vs_dqn_best_model_holdout",
         help="Name of the json file where results should be written. If file doesnt exist it will be created.",
     )
     

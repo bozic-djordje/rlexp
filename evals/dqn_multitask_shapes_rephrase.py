@@ -248,7 +248,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--store_name",
         type=str,
-        default="shapes_result_comp_rephrase_bert",
+        default="sf_vs_dqn_best_rephrase",
         help="Name of the json file where results should be written. If file doesnt exist it will be created.",
     )
     parser.add_argument(
