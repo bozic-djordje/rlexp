@@ -119,18 +119,21 @@ def experiment(trial:optuna.trial.Trial, store_path:str, config_path:str, exact_
     
     # TODO: Implement PrioritisedGroupedReplayBuffer to access prioritised memory replay
     rb = GroupedReplayBuffer(size=exp_hparams['buffer_size'])
+    non_linear = not exp_hparams["linear_models"]
     
     phi_nn = FCTree(
         in_dim=train_env.observation_space["features"].shape,
         num_heads=train_env.action_space.n,
         h_trunk=exp_hparams["phi_trunk_dim"],
         h_head=exp_hparams["phi_head_dim"],
+        non_linear=non_linear,
         device=device
     )
 
     psi_nn = FCTrunk(
         in_dim=exp_hparams["phi_head_dim"][-1] if isinstance(exp_hparams["phi_head_dim"], list) else exp_hparams["phi_head_dim"],
         h=exp_hparams["psi_nn_dim"] if isinstance(exp_hparams["psi_nn_dim"], list) else [exp_hparams["psi_nn_dim"]],
+        non_linear=non_linear,
         device=device
     )
     

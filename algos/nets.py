@@ -50,7 +50,7 @@ class ScalarMix(torch.nn.Module):
 
 
 class FCTrunk(nn.Module):
-    def __init__(self, in_dim:Union[int, Tuple], h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
+    def __init__(self, in_dim:Union[int, Tuple], h:Tuple[int]=(16), non_linear:bool=True, device:torch.device=torch.device("cpu")):
         self.device = device
 
         # Handle multidimensional input
@@ -62,13 +62,18 @@ class FCTrunk(nn.Module):
             self.flat_in_dim = in_dim
 
         modules = [
-            nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32),
-            nn.ReLU()
+            nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32)
         ]
+        if non_linear:
+            modules.append(nn.ReLU())
+        
         for i in range(1, len(h)):
             modules.append(nn.Linear(h[i-1], h[i], dtype=torch.float32))
-            modules.append(nn.ReLU())
-        modules.pop()
+            if non_linear:
+                modules.append(nn.ReLU())
+        
+        if non_linear:
+            modules.pop()
 
         super(FCTrunk, self).__init__()
         self.nnet = nn.Sequential(*modules)
@@ -117,7 +122,7 @@ class ConvTrunk(nn.Module):
 
 
 class FCMultiHead(nn.Module):
-    def __init__(self, in_dim:Union[int, Tuple], num_heads:int, h:Tuple[int]=(16), device:torch.device=torch.device("cpu")):
+    def __init__(self, in_dim:Union[int, Tuple], num_heads:int, h:Tuple[int]=(16), non_linear:bool=True, device:torch.device=torch.device("cpu")):
         super(FCMultiHead, self).__init__()
         self.num_heads = num_heads
         self.device = device
@@ -133,13 +138,18 @@ class FCMultiHead(nn.Module):
         self.action_heads = []
         for _ in range(num_heads):
             modules = [
-                nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32),
-                nn.ReLU()
+                nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32)
             ]
+            if non_linear:
+                modules.append(nn.ReLU())
+            
             for i in range(1, len(h)):
                 modules.append(nn.Linear(h[i-1], h[i], dtype=torch.float32))
-                modules.append(nn.ReLU())
-            modules.pop()
+                if non_linear:
+                    modules.append(nn.ReLU())
+            
+            if non_linear:
+                modules.pop()
             self.action_heads.append(nn.Sequential(*modules))
 
         # Add separate heads
@@ -190,11 +200,11 @@ class ConvMultiHead(nn.Module):
 
 
 class FCTree(nn.Module):
-    def __init__(self, in_dim:Union[int,Tuple], num_heads:int, h_trunk: Tuple[int] = (128,), h_head: Tuple[int] = (64,), device: torch.device = torch.device("cpu")):
+    def __init__(self, in_dim:Union[int,Tuple], num_heads:int, h_trunk: Tuple[int] = (128,), h_head: Tuple[int] = (64,), non_linear:bool=True, device: torch.device = torch.device("cpu")):
         super(FCTree, self).__init__()
         self.device = device
 
-        self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, device=device)
+        self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, non_linear=non_linear, device=device)
         # The trunk output size is the last hidden dim
         trunk_output_dim = h_trunk[-1] if len(h_trunk) > 0 else in_dim
 

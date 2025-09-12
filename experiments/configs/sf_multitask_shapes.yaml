@@ -26,6 +26,7 @@ experiment:
   update_per_step: [0.05, 0.2]
   
   # Algorithm hyper-parameters
+  'linear_models': False
   phi_trunk_dim: [[4096, 2048, 768]]
   phi_head_dim: [[768]]
   psi_nn_dim: [[768, 768], [768, 1024, 768]]

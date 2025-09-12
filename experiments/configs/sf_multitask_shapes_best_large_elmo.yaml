@@ -11,6 +11,7 @@
   'warmup_steps': 2000
   'step_per_collect': 400
   'update_per_step': 0.05413611188444832
+  'linear_models': False
   'phi_trunk_dim': [4096, 2048, 1024]
   'phi_head_dim': [1024]
   'psi_nn_dim': [1024, 1024, 1024]
