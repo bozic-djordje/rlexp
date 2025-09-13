@@ -368,11 +368,12 @@ class ShapesPositionFactory(ShapesMultitaskFactory):
 class ShapesAttrCombFactory(ShapesMultitaskFactory):
     def __init__(self, hparams, store_path):
         self._holdout_combs = hparams["reserved_combinations"]
+        if self._holdout_combs is None:
+            self._holdout_combs = []
         super().__init__(hparams, store_path)
     
     def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
         grid = np.array(grid)
-        
         positions = np.where(grid == 'T')
         positions = list(zip(positions[0], positions[1]))
         if len(positions) == 0:
