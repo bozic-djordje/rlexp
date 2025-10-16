@@ -17,8 +17,9 @@ DPI = 150
 # Predefined distinct base colors for up to ~10 models
 MODEL_BASE_COLORS = [
     "#1f77b4",  # blue
-    "#2ca02c",  # green
     "#d62728",  # red
+    "#2ca02c",  # green
+    
     "#ff7f0e",  # orange
     "#9467bd",  # purple
     "#8c564b",  # brown
@@ -238,13 +239,13 @@ def main():
     parser.add_argument(
         "--store_name",
         type=str,
-        default="sf_vs_dqn_best_rephrase",
+        default="sf_elmo_vs_dqn_bert_rephrase",
         help="Name of the JSON file under ./artefacts (with or without .json).",
     )
     parser.add_argument(
         "--config",
         type=str,
-        default="bert_vs_elmo_vs_dqn_rephrase",
+        default="bert_dqn_vs_elmo_sf",
         help="YAML config FILENAME (not a path) in ./configs, mapping {model_folder: model_id}.",
     )
     args = parser.parse_args()

@@ -224,7 +224,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_id",
         type=str,
-        default="dqn_multitask_shapes_best_large_20250830_184952",
+        default="dqn_multitask_shapes_best_large_elmo_20250830_113757",
         help="Run name of the model to be evaluated.",
     )
     parser.add_argument(
