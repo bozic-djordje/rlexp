@@ -1,14 +1,20 @@
-# 'W' - wall
-# ' ' - empty
-# 'T' - potential goal position in the test set (placement not allowed in training)
+# 'W' - Wall
+# ' ' - Empty
+# 'A' - Agent
+# 'D' - Door
+# 'O' - Object spawn location
+# Grid has (x=0,y=0) in the top left corner
+# (x=max,y=0) in the bottom left corner, 
+# and (x=max, y=max) in the bottom right corner
 grid:
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
-  - ['W', 'T', ' ', ' ', ' ', ' ', 'W']
+  - ['W', 'W', 'W', 'O', 'W', 'W', 'W']
+  - ['W', 'O', 'W', 'D', 'W', 'O', 'W']
   - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', 'A', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
-  - ['W', ' ', ' ', ' ', ' ', 'T', 'W']
+  - ['W', ' ', ' ', 'W', 'W', 'D', 'W']
+  - ['W', 'A', ' ', 'W', 'W', 'O', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  
 # If true, origin and destination locations will be masked and the agent will have to rely on text to extact them
 goal_channel: true
 obs_type: vec
@@ -21,9 +27,9 @@ seed: 1
 # use_fetures must reflect order of keys in features. It can be a subset, but order must be followed!
 use_features: [shape, colour]
 features:
-  # circle, triangle, square, diamond, star, key
-  shape: [ball, triangle, square, diamond, star, key]
-  # green, blue, red, yellow
+  # ball, triangle, square, diamond, star, key, door
+  shape: [ball, key, door]
+  # red, blue, green, yellow
   colour: [red, blue, green, yellow]
 
 task_names: [go_to, go_to_easy, pick_up, retrieve]

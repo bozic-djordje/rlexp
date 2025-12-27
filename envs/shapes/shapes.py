@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import os
 from copy import deepcopy
 import numpy as np
@@ -10,35 +10,474 @@ from utils import load_and_resize_png, overlay_with_alpha
 
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
+class SalientObj:
+    def __init__(self):
+        self._loc = None
+        self._id = None
+        self._ftr_name_to_val = None
+
+        # TODO: At some point in the future implement string redouts of events that have happened.
+        # This OO-MDP factored representation is really suitable for it. OO-MDPs even have effects!
+        # For example: "You have picked up blue ball", "You have unlocked the door", ...
+        self.effects: List[str] = []
+    
+    @property
+    def placed(self):
+        return self._loc is not None
+    
+    @property
+    def loc(self):
+        return tuple(self._loc)
+    
+    @property
+    def unique_id(self):
+        return self._id
+    
+    def activate(self, loc: Tuple, unique_id: int, ftr_name_to_val: Dict):
+        self._loc = loc
+        self._id = unique_id
+        self._ftr_name_to_val = ftr_name_to_val
+
+    @property
+    @abstractmethod
+    def asset_path(self):
+        pass
+
+
+class Shape(SalientObj):
+    def __init__(self, shape, colour, is_goal:bool=False):
+        super().__init__()
+        self._shape = shape
+        self._colour = colour
+        self._picked_up = False
+        self.is_goal = is_goal
+    
+    @property
+    def colour_feature(self):
+        return self._ftr_name_to_val[self._colour]
+    
+    @property
+    def shape_feature(self):
+        return self._ftr_name_to_val[self._shape]
+    
+    @property
+    def is_key(self):
+        return self._shape == 'key'
+    
+    @property
+    def picked_up(self):
+        return self._picked_up
+    
+    def pick_up(self):
+        self._picked_up = True
+
+    def drop(self, loc):
+        self._picked_up = False
+        self._loc = loc
+    
+    def move(self, loc):
+        self._loc = loc
+    
+    def set_goal(self):
+        self.is_goal = True
+    
+    @property
+    def asset_path(self):
+        return os.path.join(ASSETS_PATH, f"{self._shape}_{self._colour}.png")
+        
+
+class Door(SalientObj):
+    def __init__(self, colour):
+        super().__init__()
+        self._colour = colour
+        self._locked = True
+    
+    @property
+    def colour_feature(self):
+        return self._ftr_name_to_val[self._colour]
+    
+    @property
+    def locked(self):
+        return self._locked
+
+    def use_key(self):
+        self._locked = not self._locked
+
+    @property
+    def asset_path(self):
+        closed = "closed" if self._locked else "open"
+        return os.path.join(ASSETS_PATH, f"{closed}_{self._colour}.png")
+    
+
+class Actor(SalientObj):
+    def __init__(self, loc):
+        super().__init__()
+        self._id = 0
+        self._loc = loc
+        self._last_mov = "up"
+        self._inventory = None
+
+    def set_last_move(self, act: str):
+        self._last_mov = act
+    
+    def pick_up(self, obj: Shape) -> bool:
+        if self._inventory is None:
+            self._inventory = obj
+            self._inventory.pick_up()
+            return True
+        else:
+            return False
+    
+    def drop(self) -> bool:
+        if self._inventory is not None:
+            self._inventory.drop(loc=self._loc)
+            self._inventory = None
+            return True
+        else:
+            return False
+        
+    def move(self, loc: Tuple, act: str):
+        self._loc = loc
+        self.set_last_move(act)
+        if self._inventory is not None:
+            self._inventory.move(loc=loc)
+    
+    @property
+    def inventory(self):
+        return self._inventory
+    
+    @property
+    def loc(self):
+        return self._loc
+    
+    @property
+    def asset_path(self):
+        return os.path.join(ASSETS_PATH, f"agent_{self._last_mov}.png")
+
+
+class Wall:
+    def __init__(self, loc):
+        self._loc = loc
+
+
 DEFAULT_OBJECTS = [
-        {
-            "loc": (1,1),
-            "shape": "ball",
-            "colour": "red",
-            "is_goal": True
-        },
-        {
-            "loc": (1, 8),
-            "shape": "diamond",
-            "colour": "blue"
-        }
+    Shape(shape="ball", colour="blue", is_goal=True),
+    Shape(shape="key", colour="red"),
+    Shape(shape="key", colour="blue"),
+    Shape(shape="ball", colour="red")
     ]
+
+DEFAULT_DOORS = [
+    Door(colour="blue"),
+    Door(colour="red")
+]
+
+
+class GameMap:
+    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, seed:int=0):
+        self.rng = np.random.default_rng(seed)
+        
+        self._walls = []
+        self._objects: List[Shape] = deepcopy(objects)
+        self._doors: List[Door] = deepcopy(doors)
+        self._door_locs: List[Tuple] = []
+
+        grid_mat = np.array(grid)
+        self._wall_mask = np.equal(grid_mat, 'W')
+        self._door_mask = np.equal(grid_mat, 'D')
+
+        # Map between feature names (e.g. blue) and their values in the observation space (e.g. 2)
+        self.ftr_name_to_val = {}
+        for _, feature_names in features.items():
+            for idx, name in enumerate(feature_names):
+                self.ftr_name_to_val[name] = idx+1
+
+        # repr_vec - a factored state observed by the agent
+        self._obs = np.zeros(5*len(objects) + 4*len(doors) + 2, dtype=np.uint8)
+        self._door_idxs_start = len(objects)*5
+        self._agent_idxs_start = len(objects)*5 + len(doors)*4
+        
+        obj_idx = 0
+        door_idx = 0
+        
+        self._actor = None
+        self._goal_object = None
+        
+        for x in range(len(grid)):
+            row = grid[x]
+            for y in range(len(row)):
+                elem = grid[x][y]
+                if elem == 'W':
+                    self._walls.append(Wall(loc=(x,y)))
+                elif elem == ' ':
+                    pass
+                elif elem == 'A':
+                    self._actor = Actor(loc=(x,y))
+                    self._obs[self._agent_idxs_start] = x
+                    self._obs[self._agent_idxs_start+1] = y
+                elif elem == 'O':
+                    obj = self._objects[obj_idx]
+                    obj.activate(loc=(x,y), unique_id=obj_idx, ftr_name_to_val=self.ftr_name_to_val)
+                    self._obs[obj_idx*5] = x
+                    self._obs[obj_idx*5+1] = y
+                    self._obs[obj_idx*5+2] = obj.colour_feature
+                    self._obs[obj_idx*5+3] = obj.shape_feature
+                    self._obs[obj_idx*5+4] = int(obj.picked_up)
+                    
+                    if obj.is_goal:
+                        self._goal_object = obj
+                    
+                    obj_idx += 1
+                elif elem == 'D':
+                    door = self._doors[door_idx]
+                    door.activate(loc=(x,y), unique_id=door_idx, ftr_name_to_val=self.ftr_name_to_val)
+                    self._door_locs.append((x,y))
+                    self._obs[self._door_idxs_start + door_idx*4] = x
+                    self._obs[self._door_idxs_start + door_idx*4+1] = y
+                    self._obs[self._door_idxs_start + door_idx*4+2] = door.colour_feature
+                    self._obs[self._door_idxs_start + door_idx*4+3] = int(door.locked)
+                    door_idx += 1
+
+        # If agent starts at a random location
+        if self._actor is None:
+            coords = np.argwhere(self.empty_mask)
+            idx = self.rng.integers(len(coords))
+            y, x = coords[idx]
+            
+            self._actor = Actor(loc=(x,y))
+            self._obs[self._agent_idxs_start] = x
+            self._obs[self._agent_idxs_start+1] = y
+        
+        self.agent_start_loc = self.agent_loc
+
+    @property
+    def agent_loc(self):
+        return tuple(self._actor.loc)
+    
+    @property
+    def goal_loc(self):
+        return tuple(self._goal_object.loc)
+    
+    @property
+    def goal_id(self):
+        return self._goal_object.unique_id
+    
+    @property
+    def inventory_id(self):
+        if self._actor.inventory is not None:
+            return self._actor.inventory.unique_id
+        else:
+            return None
+    
+    @property
+    def inventory_full(self):
+        return True if self._actor.inventory is not None else False
+    
+    @property
+    def observation(self):
+        return self._obs.copy()
+    
+    def object_id_to_obs_idx(self, unique_id:int):
+        obj_x = unique_id*5
+        obj_y = unique_id*5 + 1
+        obj_colour = unique_id*5 + 2
+        obj_shape = unique_id*5 + 3
+        obj_picked_up = unique_id*5 + 4
+        return obj_x, obj_y, obj_colour, obj_shape, obj_picked_up
+
+    def door_id_to_obs_idx(self, unique_id:int):
+        obj_x = self._door_idxs_start + unique_id*4
+        obj_y = self._door_idxs_start + unique_id*4 + 1
+        obj_colour = self._door_idxs_start + unique_id*4 + 2
+        locked = self._door_idxs_start + unique_id*4 + 3
+        return obj_x, obj_y, obj_colour, locked
+
+    def move(self, loc:Tuple, act:str) -> bool:
+        # Sets last attempted move, regardless of success
+        self._actor.set_last_move(act=act)
+        success = False
+        x, y = loc
+        
+        if self._wall_mask[x,y]:
+            return success
+        
+        if self._door_mask[x,y] and self._doors[self._door_locs.index(loc)].locked:
+            return success
+        
+        self._actor.move(loc=loc, act=act)
+        self._obs[self._agent_idxs_start:self._agent_idxs_start+2] = loc
+        if self._actor.inventory is not None:
+            obj_id = self._actor.inventory.unique_id
+            obj_x, obj_y, _, _, _ = self.object_id_to_obs_idx(unique_id=obj_id)
+            self._obs[obj_x:obj_y+1] = loc
+        
+        success = True
+        return success
+        
+    def pick_up(self) -> bool:
+        success = False
+
+        for obj in self._objects:
+            if obj.loc == self.agent_loc:
+                success = self._actor.pick_up(obj=obj)
+                if success:
+                    _, _, _, _, picked_up = self.object_id_to_obs_idx(unique_id=obj.unique_id)
+                    self._obs[picked_up] = 1
+                break
+        
+        return success
+        
+    def drop(self) -> bool:
+        success = False
+
+        if self._actor.inventory is None:
+            return success
+        
+        success = True
+        for obj in self._objects:
+            # There is another object at the position where the agent is trying to drop inventory
+            if obj.loc == self.agent_loc and obj.unique_id != self._actor.inventory.unique_id:
+                success = False
+                break
+        
+        if success is False:
+            return success
+        
+        dropped_id = self._actor.inventory.unique_id
+        success = self._actor.drop()
+        if success:
+            # No need to change object location as it will already have been changed
+            _, _, _, _, picked_up = self.object_id_to_obs_idx(unique_id=dropped_id)
+            self._obs[picked_up] = 0
+        
+        return success
+
+    def use_key(self) -> bool:
+        success = False
+
+        if not self._actor.inventory or not self._actor.inventory.is_key:
+            return success
+        
+        loc_np = np.array(self.agent_loc)
+        adjecent_locs = [loc_np + (0, 1), loc_np + (1, 0), loc_np + (0, -1), loc_np + (-1, 0)]
+        
+        for loc in adjecent_locs:
+            loc = tuple(loc)
+            if loc not in self._door_locs:
+                continue
+
+            door = self._doors[self._door_locs.index(loc)]
+            
+            if door.colour_feature == self._actor.inventory.colour_feature:
+                success = True
+                door.use_key()
+                _, _, _, locked = self.door_id_to_obs_idx(unique_id=door.unique_id)
+                self._obs[locked] = int(door.locked)
+                #TODO: If multiple doors with the same colour are possible, remove break
+                break
+        
+        return success
+    
+    def render_feature_grid(self, cell_size:int=60):
+        """Render the grid with color fill in a vectorized manner.
+        Return the upscaled color image (no text yet)."""
+        rows, cols = self._wall_mask.shape
+
+        # 1) Initialize color array: all white
+        color_arr = np.full((rows, cols, 3), fill_value=(255, 255, 255), dtype=np.uint8)
+
+        # 2) Assign black for 'W' walls
+        color_arr[self._wall_mask] = (0, 0, 0)  # black
+
+        # 4) Upscale each cell to cell_size x cell_size
+        image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
+        return image
+    
+    def add_features(self, image, cell_size=60):
+        """
+        For each cell that has a feature (F0, F1, etc.):
+        - Otherwise, place the two letters in the cell
+        """
+        small_size = cell_size
+        xsmall_size = int(cell_size/2)
+
+        agent_image = load_and_resize_png(
+            path=self._actor.asset_path, 
+            cell_size=cell_size,
+            keep_alpha=True
+        )
+
+        goal_image = load_and_resize_png(
+            path=os.path.join(ASSETS_PATH, "goal.png"),
+            cell_size=cell_size,
+            keep_alpha=True
+        )
+        
+        inventory_obj = None
+
+        for obj in self._objects:
+            
+            # Plotted a bit differently
+            if obj.picked_up:
+                inventory_obj = obj
+                continue
+            
+            obj_img = load_and_resize_png(path=obj.asset_path, cell_size=cell_size, keep_alpha=True)
+            
+            x = obj.loc[0]
+            y = obj.loc[1]
+
+            y0 = x * cell_size
+            x0 = y * cell_size
+            overlay_with_alpha(image, obj_img, x0, y0)
+            
+        for door in self._doors:
+            door_img = load_and_resize_png(path=door.asset_path, cell_size=cell_size, keep_alpha=True)
+            x = door.loc[0]
+            y = door.loc[1]
+            y0 = x * cell_size
+            x0 = y * cell_size
+            overlay_with_alpha(image, door_img, x0, y0)
+
+        # Plot current agent position
+        y0 = self.agent_loc[0] * cell_size
+        x0 = self.agent_loc[1] * cell_size
+        x_offset = x0 + (cell_size - small_size) // 2
+        y_offset = y0 + (cell_size - small_size) // 2
+        overlay_with_alpha(image, agent_image, x_offset, y_offset)
+
+        if inventory_obj is not None:
+            y0 = inventory_obj.loc[0] * cell_size
+            x0 = inventory_obj.loc[1] * cell_size
+            x_offset = x0 + (cell_size - xsmall_size) // 2
+            y_offset = y0 + (cell_size - xsmall_size) // 2
+            inventory_img = load_and_resize_png(path=inventory_obj.asset_path, cell_size=xsmall_size, keep_alpha=True)
+            overlay_with_alpha(image, inventory_img, x_offset, y_offset)
+        
+        # Plot goal position
+        y0 = self.goal_loc[0] * cell_size
+        x0 = self.goal_loc[1] * cell_size
+        x_offset = x0 + (cell_size - small_size) // 2
+        y_offset = y0 + (cell_size - small_size) // 2
+        overlay_with_alpha(image, goal_image, x_offset, y_offset)
 
 
 class Shapes(gym.Env):
-    def __init__(self, objects: List[Dict], grid: List, feature_order: List, features: Dict, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, seed:int=0, goal_channel:bool=False, obs_type:str="box"):
+    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, max_steps:int=None, slip_chance:float=0, seed:int=0):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
-        
-        self._feature_order = feature_order
-        self._features = features
-        self._feature_map, self._feature_rmap = self._init_feature_map()
-        self._default_feature = default_feature
-
-        self._grid = np.array(grid)
-        self._objects = objects
         self._slip_chance = slip_chance
-        
+
+        self._grid = deepcopy(grid)
+        self._objects = deepcopy(objects)
+        self._doors = deepcopy(doors)
+        self._features = features
+
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, seed=seed)
+        self.observation_space = gym.spaces.MultiDiscrete([10] * self.map.observation.shape[0])
+
         self._action_to_direction = {
             0: np.array([-1, 0]), # up
             1: np.array([1, 0]),  # down
@@ -50,99 +489,26 @@ class Shapes(gym.Env):
             0: "up",
             1: "down",
             2: "left",
-            3: "right"
+            3: "right",
+            4: "pick_up",
+            5: "drop",
+            6: "use"
         }
 
-        self._max_steps = max_steps
+        if max_steps is None:
+            self._max_steps = 100000
+        else:
+            self._max_steps = max_steps
         self._steps = 0
 
-        self.action_space = gym.spaces.Discrete(4)
+        # UP, DOWN, LEFT, RIGHT, PICK_UP, DROP, USE
+        self.action_space = gym.spaces.Discrete(7)
 
         # Seeding random generators for reproducibility
        
         self.action_space.seed(seed=seed)
         self.rng = np.random.default_rng(seed)
-
-        # [channels, height, width]
-        # channels = (agent_present, shape_feature, colour_feature)
-        # or
-        # channels = (agent, goal, shape_feature, colour_feature)
-        self._obs_type = obs_type
-        self._goal_channel = goal_channel
-        self._first_feature_ind = 1 + int(goal_channel)
-        self._num_channels = len(self._feature_order) + 1 + int(goal_channel)
-        self.observation_space = self._init_observation_space()
-        
-        self._game_map = None
-        self._game_vec = None
-        self._goal_location = None
-        self._agent_location = None
-        self._agent_orientation = None
         _ = self.reset(options={"objects": objects})
-
-    def _init_feature_map(self) -> Dict:
-        feature_map = {}
-        feature_rmap = {}
-        i = 0
-
-        for feature_name in self._feature_order:
-            values = self._features[feature_name]
-            feature_rmap[i] = {}
-            
-            for ind, name in enumerate(values):
-                feature_map[name] = ind+1
-                feature_rmap[i][ind+1] = name
-
-            i+=1
-        return feature_map, feature_rmap
-    
-    def _init_game_map(self):
-        game_map = np.zeros((self._num_channels, self._grid.shape[0], self._grid.shape[1]), dtype=np.int8)
-        walls = np.equal(self._grid, 'W')
-        game_map[:, walls] = -1
-
-        num_features = len(self._feature_order)
-        vec_len = len(self._objects) * (2 + num_features) + 2
-        vec_len += num_features if self._goal_channel else 0
-        game_vec = np.ones(vec_len, dtype=np.int8) * -1
-        
-        goal_location = None
-        goal_features = np.ones(num_features, dtype=np.int8) * -1
-        
-        agent_location = self._init_start_location()
-        game_map[0, agent_location[0], agent_location[1]] = 1
-        game_vec[0:2] = agent_location
-        vec_ind = 2
-
-        obj_cpy = deepcopy(self._objects)
-        sorted_objs = sorted(obj_cpy, key=lambda d: (d["loc"][0], d["loc"][1]))
-
-        for obj in sorted_objs:
-            loc = obj.pop("loc")
-            is_goal = obj.pop("is_goal", False)
-            if is_goal:
-                goal_location = loc
-            
-            game_vec[vec_ind:vec_ind+2] = loc
-            vec_ind += 2
-            
-            for i, (feature, value) in enumerate(obj.items()):
-                channel_index = self._feature_order.index(feature) + self._first_feature_ind
-                index = (channel_index,) + loc
-                game_map[index] = self._feature_map[value]
-                game_vec[vec_ind] = self._feature_map[value]
-                vec_ind += 1
-
-                if is_goal:
-                    goal_features[i] = self._feature_map[value]
-
-        if self._goal_channel:
-            game_map[1, goal_location[0], goal_location[1]] = 1
-            game_vec[-num_features:] = goal_features
-        
-        assert not np.any(game_vec == -1)
-        assert not np.any(goal_features == -1)
-        return game_map, game_vec, goal_location, agent_location
     
     def _init_start_location(self):
         specified_locs = np.where(self._grid == 'A')
@@ -153,46 +519,9 @@ class Shapes(gym.Env):
         loc = self.rng.choice(candidates)
         return tuple(loc)
     
-    def _init_observation_space(self) -> gym.spaces.Space:
-        if self._obs_type == "vec":
-            vec_len = len(self._objects) * (2 + len(self._feature_order)) + 2
-            vec_len += 2 if self._goal_channel else 0
-            # [agent_x, agent_y, obj_1_x, obj_1_y, obj_1_feature_1, obj_1_feature_2, ..., <goal_x>, <goal_y>]
-            obs_space = gym.spaces.MultiDiscrete([10] * vec_len)
-        elif self._obs_type == "box":
-            obs_space = gym.spaces.Box(
-                low=-1,
-                high=6,
-                shape=(self._num_channels, 3, 3),
-                dtype=np.int8
-            )
-        else:
-            raise ValueError(f"Obs type must be either vec or box. Unrecognised type {self._obs_type}.")
-
-        return obs_space
-    
     @property
-    def obs(self) -> gym.spaces.Box:
-        if self._obs_type == "vec":
-            obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
-            obs[0:2] = self.agent_location
-            obs[2:] = self._game_vec[2:]
-        else:
-            obs = self._game_map[:, self.agent_location[0]-1:self.agent_location[0]+2, 
-                                 self.agent_location[1]-1:self.agent_location[1]+2]
-        return obs
-    
-    @property 
-    def wall_mask(self) -> np.ndarray:
-        return np.equal(self._grid, 'W')
-    
-    @property
-    def grid_shape(self) -> np.ndarray:
-        return self._grid.shape
-    
-    @property
-    def agent_location(self) -> Tuple:
-        return tuple(self._agent_location)
+    def obs(self) -> gym.spaces.MultiDiscrete:
+        return self.map.observation
     
     def reset(self, seed: Optional[int]=None, options: Optional[dict]={}):
         """ Reset the environment and return the initial state number
@@ -202,16 +531,25 @@ class Shapes(gym.Env):
         info = {}
 
         objects = options.get("objects", None)
-        if objects is not None:
-            self._objects = objects
+        doors = options.get("doors", None)
         
-        self._game_map, self._game_vec, self._goal_location, self._agent_location = self._init_game_map()
-        self._agent_orientation = 3
-   
-        assert self._grid[self._agent_location] != 'W'
+        # We need deepcopies here because GameMap will modify these objects during the episode.
+        # We don't want any info leakage between episodes.
+        if objects is not None:
+            self._objects = deepcopy(objects)
+        else:
+            objects = deepcopy(self._objects)
+        
+        if doors is not None:
+            self._doors = deepcopy(doors)
+        else:
+            doors = deepcopy(self._doors)
+        grid = deepcopy(self._grid)
+        
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, seed=seed)
         return self.obs, info
     
-    def _movement(self, action) -> None:
+    def _movement(self, action) -> bool:
         """ Perform an action in the environment. Actions are as follows:
             - 0: go up
             - 1: go down
@@ -219,16 +557,8 @@ class Shapes(gym.Env):
             - 3: go right
             - 4: pick up
             - 5: drop
+            - 6: use
         """
-        if isinstance(action, torch.Tensor) or isinstance(action, np.ndarray):
-            action = action.item()
-        assert(action >= 0)
-        assert(action <= 5)
-        self._game_map[0, self.agent_location[0], self.agent_location[1]] = 0
-
-        if action < 4:
-            self._agent_orientation = action
-
         # Update agent location for the movement actions
         if self.rng.random() < self._slip_chance:
             if action == 0:
@@ -240,14 +570,9 @@ class Shapes(gym.Env):
             elif action == 3:
                 action = self.rng.choice([0, 1])
         
-        agent_location = tuple(list(self._agent_location) + self._action_to_direction[action])
-        if self._grid[agent_location] != 'W':
-            self._agent_location = agent_location
-        assert self._grid[self._agent_location] != 'W'
-        self._game_map[0, self.agent_location[0], self.agent_location[1]] = 1
-        
-        non_walls = ~np.equal(self._grid, 'W')
-        assert(sum(self._game_map[0, non_walls]) == 1)
+        loc_candidate = tuple(np.array(self.map.agent_loc) + self._action_to_direction[action])
+        success = self.map.move(loc=loc_candidate, act=self._action_to_str[action])
+        return success
 
     @abstractmethod
     def step(self, action):
@@ -256,12 +581,28 @@ class Shapes(gym.Env):
             - 1: go down
             - 2: go left
             - 3: go right
-            - 4: pick up #not used for now
-            - 5: drop #not used for now
+            - 4: pick up
+            - 5: drop
+            - 6: use
         """
-        self._movement(action=action)
+        if isinstance(action, torch.Tensor) or isinstance(action, np.ndarray):
+            action = action.item()
+        assert(action >= 0)
+        assert(action <= 6)
+
+        if action < 4:
+            success = self._movement(action=action)
+        elif action == 4:
+            success = self.map.pick_up()
+        elif action == 5:
+            success = self.map.drop()
+        elif action == 6:
+            success = self.map.use_key()
+
         self._steps += 1
-        info = {}
+        info = {
+            "success": success
+        }
         truncated = False
         if self._max_steps is not None and self._steps >= self._max_steps:
             truncated = True
@@ -271,101 +612,9 @@ class Shapes(gym.Env):
         is_terminal = None
         return self.obs, reward, is_terminal, truncated, info
     
-    def _get_asset_path(self, features: List) -> str:
-        # Features with relevant assets have non zero values
-        if sum(features) < len(features):
-            return None
-        
-        asset_name = ""
-        for channel_ind, feature_value in enumerate(features):
-            asset_name += f"{self._feature_rmap[channel_ind][feature_value]}_"
-        
-        asset_name = f"{asset_name[:-1]}.png"
-        asset_path = os.path.join(ASSETS_PATH, asset_name)
-        return asset_path
-    
-    def _get_agent_asset_path(self) -> str:
-        asset_name = f"agent_{self._action_to_str[self._agent_orientation]}.png"
-        asset_path = os.path.join(ASSETS_PATH, asset_name)
-        return asset_path
-    
-    def _get_goal_asset_path(self) -> str:
-        asset_path = os.path.join(ASSETS_PATH, "goal.png")
-        return asset_path
-
-    def _render_feature_grid(self, cell_size:int=60):
-        """Render the grid with color fill in a vectorized manner.
-        Return the upscaled color image (no text yet)."""
-        rows, cols = self._grid.shape
-
-        # 1) Initialize color array: all white
-        color_arr = np.full((rows, cols, 3), fill_value=(255, 255, 255), dtype=np.uint8)
-
-        # 2) Assign black for 'W' walls
-        color_arr[self.wall_mask] = (0, 0, 0)  # black
-
-        # 4) Upscale each cell to cell_size x cell_size
-        image = color_arr.repeat(cell_size, axis=0).repeat(cell_size, axis=1)
-        return image
-    
-    def _add_features(self, image, cell_size=60):
-        """
-        For each cell that has a feature (F0, F1, etc.):
-        - Otherwise, place the two letters in the cell
-        """
-        # Pre-load and resize PNG images if needed
-        png_cache = {}
-        small_size = cell_size
-
-        agent_image = load_and_resize_png(
-            path=self._get_agent_asset_path(), 
-            cell_size=cell_size,
-            keep_alpha=True
-        )
-
-        goal_image = load_and_resize_png(
-            path=self._get_goal_asset_path(),
-            cell_size=cell_size,
-            keep_alpha=True
-        )
-
-        for r in range(self._game_map.shape[1]):
-            for c in range(self._game_map.shape[2]):
-                features = list(self._game_map[self._first_feature_ind:, r, c])
-                asset_path = self._get_asset_path(features=features)
-                if asset_path is not None:
-                    png_cache[(r,c)] = load_and_resize_png(
-                        path=asset_path, 
-                        cell_size=cell_size, 
-                        keep_alpha=False
-                    )
-        
-        # Iterate over each feature type
-        for loc, val in png_cache.items():
-            r = loc[0]
-            c = loc[1]
-
-            y0, y1 = r * cell_size, (r + 1) * cell_size
-            x0, x1 = c * cell_size, (c + 1) * cell_size
-            image[y0:y1, x0:x1] = val
-
-        # Plot current agent position
-        y0, y1 = self._agent_location[0] * cell_size, (self._agent_location[0] + 1) * cell_size
-        x0, x1 = self._agent_location[1] * cell_size, (self._agent_location[1] + 1) * cell_size
-        x_offset = x0 + (cell_size - small_size) // 2
-        y_offset = y0 + (cell_size - small_size) // 2
-        overlay_with_alpha(image, agent_image, x_offset, y_offset)
-        
-        # Plot goal position
-        y0, y1 = self._goal_location[0] * cell_size, (self._goal_location[0] + 1) * cell_size
-        x0, x1 = self._goal_location[1] * cell_size, (self._goal_location[1] + 1) * cell_size
-        x_offset = x0 + (cell_size - small_size) // 2
-        y_offset = y0 + (cell_size - small_size) // 2
-        overlay_with_alpha(image, goal_image, x_offset, y_offset)
-    
     def render_frame(self) -> np.ndarray:
-        image = self._render_feature_grid()
-        self._add_features(image=image)
+        image = self.map.render_feature_grid()
+        self.map.add_features(image=image)
         return image
 
     def store_frame(self, plot_name:str='table') -> None:
@@ -376,49 +625,46 @@ class Shapes(gym.Env):
 
 class ShapesGoto(Shapes):
     def step(self, action):
-        # Superclass will perform the agent movement but will not do any of the additional actions
-        # or provide sensible reward
-        obs, _, _, truncated, info = super().step(action)
-        
-        confounder_locations = set([obj["loc"] for obj in self._objects if "is_goal" not in obj or not obj["is_goal"]])
-        is_terminal = False
-        reward = -1
-
-        if self._agent_location == self._goal_location:
-            is_terminal = True
-            reward = 10
-        elif self._agent_location in confounder_locations:
-            reward = -10
-            info = {"is_confounder": True}
-        
-        return obs, reward, is_terminal, truncated, info
-    
-
-# TODO: You do not get negative rewards when you step on an object that isn't goal object
-class ShapesGotoEasy(Shapes):
-    def step(self, action):
         obs, _, _, truncated, info = super().step(action)
         
         is_terminal = False
         reward = -1
 
-        if self._agent_location == self._goal_location:
+        if self.map.agent_loc == self.map.goal_loc:
             is_terminal = True
             reward = 10
         
         return obs, reward, is_terminal, truncated, info
 
 
-# TODO
 class ShapesPickup(Shapes):
     def step(self, action):
-        return super().step(action)
+        
+        obs, _, _, truncated, info = super().step(action)
+        
+        is_terminal = False
+        reward = -1
+
+        if self.map.inventory_id == self.map.goal_id:
+            is_terminal = True
+            reward = 10
+        
+        return obs, reward, is_terminal, truncated, info
 
 
-# TODO: Equivalent to Taxicab
 class ShapesRetrieve(Shapes):
     def step(self, action):
-        return super().step(action)
+        
+        obs, _, _, truncated, info = super().step(action)
+        
+        is_terminal = False
+        reward = -1
+
+        if self.map.inventory_id == self.map.goal_id and self.map.agent_loc == self.map.agent_start_loc:
+            is_terminal = True
+            reward = 10
+        
+        return obs, reward, is_terminal, truncated, info
 
 
 if __name__ == '__main__':
@@ -433,22 +679,14 @@ if __name__ == '__main__':
         hparams = yaml.safe_load(file)
 
     grid = hparams["grid"]
-    feature_order = hparams["use_features"]
     features = hparams["features"]
     
-    for key in features.keys():
-        if key not in set(feature_order):
-            for obj in DEFAULT_OBJECTS:
-                obj.pop(key)
-
-    env = ShapesGoto(
+    env = ShapesRetrieve(
         objects=DEFAULT_OBJECTS,
-        grid=grid,
-        feature_order=feature_order,
-        features=features,
-        store_path=store_path,
-        goal_channel=True,
-        obs_type="vec"
+        doors=DEFAULT_DOORS,
+        grid=hparams["grid"],
+        features=hparams["features"],
+        store_path=store_path
     )
     env.store_frame()
     
