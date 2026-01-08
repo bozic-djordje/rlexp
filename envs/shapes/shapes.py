@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 import os
 from copy import deepcopy
 import numpy as np
@@ -13,10 +13,11 @@ ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
 class SalientObj:
-    def __init__(self):
+    def __init__(self, is_goal:bool=False):
         self._loc = None
         self._id = None
         self._ftr_name_to_val = None
+        self.is_goal = is_goal
 
         # TODO: At some point in the future implement string redouts of events that have happened.
         # This OO-MDP factored representation is really suitable for it. OO-MDPs even have effects!
@@ -48,23 +49,31 @@ class SalientObj:
 
 class Shape(SalientObj):
     def __init__(self, shape, colour, is_goal:bool=False):
-        super().__init__()
-        self._shape = shape
-        self._colour = colour
+        super().__init__(is_goal=is_goal)
+        self.shape = shape
+        self.colour = colour
         self._picked_up = False
-        self.is_goal = is_goal
+
+    def __eq__(self, value):
+        return self.shape == value.shape and self.colour == value.colour
+    
+    def __str__(self):
+        description = f"{self.colour} {self.shape}"
+        if self._picked_up:
+            description += " picked up"
+        return description
     
     @property
     def colour_feature(self):
-        return self._ftr_name_to_val[self._colour]
+        return self._ftr_name_to_val[self.colour]
     
     @property
     def shape_feature(self):
-        return self._ftr_name_to_val[self._shape]
+        return self._ftr_name_to_val[self.shape]
     
     @property
     def is_key(self):
-        return self._shape == 'key'
+        return self.shape == 'key'
     
     @property
     def picked_up(self):
@@ -85,18 +94,29 @@ class Shape(SalientObj):
     
     @property
     def asset_path(self):
-        return os.path.join(ASSETS_PATH, f"{self._shape}_{self._colour}.png")
+        return os.path.join(ASSETS_PATH, f"{self.shape}_{self.colour}.png")
         
 
 class Door(SalientObj):
-    def __init__(self, colour):
-        super().__init__()
-        self._colour = colour
+    def __init__(self, colour, is_goal:bool=False):
+        super().__init__(is_goal=is_goal)
+        self.colour = colour
         self._locked = True
+
+    def __eq__(self, value):
+        return self.colour == value.colour
+    
+    def __str__(self):
+        description = f"{self.colour} door"
+        if self._locked:
+            description = "locked " + description
+        else:
+            description = "unlocked " + description
+        return description
     
     @property
     def colour_feature(self):
-        return self._ftr_name_to_val[self._colour]
+        return self._ftr_name_to_val[self.colour]
     
     @property
     def locked(self):
@@ -108,7 +128,7 @@ class Door(SalientObj):
     @property
     def asset_path(self):
         closed = "closed" if self._locked else "open"
-        return os.path.join(ASSETS_PATH, f"{closed}_{self._colour}.png")
+        return os.path.join(ASSETS_PATH, f"{closed}_{self.colour}.png")
     
 
 class Actor(SalientObj):
@@ -202,8 +222,8 @@ class GameMap:
         obj_idx = 0
         door_idx = 0
         
-        self._actor = None
-        self._goal_object = None
+        self._actor: Actor = None
+        self._goal_object: Union[Shape, Door] = None
         
         for x in range(len(grid)):
             row = grid[x]
@@ -217,7 +237,7 @@ class GameMap:
                     self._actor = Actor(loc=(x,y))
                     self._obs[self._agent_idxs_start] = x
                     self._obs[self._agent_idxs_start+1] = y
-                elif elem == 'O':
+                elif elem == 'O' or elem == 'K':
                     obj = self._objects[obj_idx]
                     obj.activate(loc=(x,y), unique_id=obj_idx, ftr_name_to_val=self.ftr_name_to_val)
                     self._obs[obj_idx*5] = x
@@ -238,6 +258,10 @@ class GameMap:
                     self._obs[self._door_idxs_start + door_idx*4+1] = y
                     self._obs[self._door_idxs_start + door_idx*4+2] = door.colour_feature
                     self._obs[self._door_idxs_start + door_idx*4+3] = int(door.locked)
+
+                    if door.is_goal:
+                        self._goal_object = door
+
                     door_idx += 1
 
         # If agent starts at a random location
@@ -257,12 +281,20 @@ class GameMap:
         return tuple(self._actor.loc)
     
     @property
+    def goal(self):
+        return deepcopy(self._goal_object)
+    
+    @property
     def goal_loc(self):
         return tuple(self._goal_object.loc)
     
     @property
     def goal_id(self):
         return self._goal_object.unique_id
+    
+    @property
+    def goal_locked(self):
+        return self._goal_object.locked
     
     @property
     def inventory_id(self):
@@ -508,7 +540,7 @@ class Shapes(gym.Env):
        
         self.action_space.seed(seed=seed)
         self.rng = np.random.default_rng(seed)
-        _ = self.reset(options={"objects": objects})
+        _ = self.reset(options={"objects": objects, "doors": doors})
     
     def _init_start_location(self):
         specified_locs = np.where(self._grid == 'A')
@@ -522,6 +554,10 @@ class Shapes(gym.Env):
     @property
     def obs(self) -> gym.spaces.MultiDiscrete:
         return self.map.observation
+    
+    @property
+    def goal(self):
+        return self.map.goal
     
     def reset(self, seed: Optional[int]=None, options: Optional[dict]={}):
         """ Reset the environment and return the initial state number
@@ -646,6 +682,21 @@ class ShapesPickup(Shapes):
         reward = -1
 
         if self.map.inventory_id == self.map.goal_id:
+            is_terminal = True
+            reward = 10
+        
+        return obs, reward, is_terminal, truncated, info
+    
+
+class ShapesUnlock(Shapes):
+    def step(self, action):
+        
+        obs, _, _, truncated, info = super().step(action)
+        
+        is_terminal = False
+        reward = -1
+
+        if not self.map.goal_locked:
             is_terminal = True
             reward = 10
         

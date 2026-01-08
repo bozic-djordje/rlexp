@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from itertools import product
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 import os
 import numpy as np
 import gymnasium as gym
@@ -9,20 +9,17 @@ from gymnasium import spaces
 import random
 import re
 from copy import deepcopy
-from envs.shapes.shapes import ShapesGoto, ShapesGotoEasy, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS
+from envs.shapes.shapes import Shapes, ShapesGoto, ShapesUnlock, ShapesPickup, ShapesRetrieve, DEFAULT_OBJECTS, Shape, Door
 
 
-def generate_instruction(instr: str, goal: dict, all_feature_keys: list) -> str:
+def generate_instruction(instr: str, goal: Union[Door|Shape]) -> str:
         # Split the sentence into words and punctuation
         tokens = re.findall(r'\w+|[^\w\s]', instr)
 
         result_tokens = []
         for token in tokens:
-            if token in goal:
-                result_tokens.append(goal[token])
-            elif token in all_feature_keys:
-                # It's a placeholder, but not provided — skip it
-                continue
+            if hasattr(goal, token):
+                result_tokens.append(getattr(goal, token))
             else:
                 result_tokens.append(token)
 
@@ -41,7 +38,10 @@ def create_all_synonyms(synonyms: Dict, env=None, templates=None, use_features=N
     if env is not None:
         templates = env._instr_templates
         use_features = env._features.keys()
-        goal_list = env.goal_list
+        if env._task_id == "unlock":
+            goal_list = deepcopy(env._all_door_ftr_combs)
+        else:
+            goal_list = deepcopy(env._all_obj_ftr_combs)
 
     synonyms_list = set() 
     for goal in goal_list: 
@@ -52,10 +52,10 @@ def create_all_synonyms(synonyms: Dict, env=None, templates=None, use_features=N
     return synonyms_dict, list(synonyms_list)
 
 
-def create_synonyms(goal: Dict, templates: List, synonyms: Dict, use_features: Set) -> Dict: 
+def create_synonyms(goal: Union[Shape|Door], templates: List, synonyms: Dict) -> Dict: 
     goal_synonyms = set([])
     for template in templates:
-        instr = generate_instruction(instr=deepcopy(template), goal=deepcopy(goal), all_feature_keys=use_features)
+        instr = generate_instruction(instr=deepcopy(template), goal=deepcopy(goal))
         for keyword, feature_synonyms in synonyms.items():
             if keyword in instr: 
                 instr_2 = deepcopy(instr)
@@ -67,58 +67,74 @@ def create_synonyms(goal: Dict, templates: List, synonyms: Dict, use_features: S
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, allowed_objects: List, grid:List[List], task_id:str, instruction_templates:List, feature_order:List, features:Dict, num_objects: int, resample_interval:int, store_path:str, default_feature:int=0, max_steps:int=200, slip_chance:float=0, goal_channel:bool=False, change_loc_on_fix_goal:bool=False, obs_type:str="box", seed:int=0):
+    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  cmb_t:int, cmp_t:int, store_path:str, max_steps:int=None, slip_chance:float=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
-        
-        self._num_objects = num_objects
-        self._allowed_objects = allowed_objects
+        self._num_objs = np.equal(np.array(grid), 'O').sum() + np.equal(np.array(grid), 'K').sum()
+        self._num_doors = np.equal(np.array(grid), 'D').sum()
 
-        self._feature_order = feature_order
-        self._features = features
+        # Key mask tells us whether to generate a key or another shape when generating
+        # the list of all objects for a specific task. Keys are treated as objects in all regards,
+        # but this mask is necessary to ensure keys aren't locked inside rooms they unlock
+        self._key_mask = []
+        for i in range(len(grid)):
+            for j in range(len(grid[i])):
+                if grid[i][j] == 'O':
+                    self._key_mask.append(False)
+                elif grid[i][j] == 'K':
+                    self._key_mask.append(True)
 
-        self._instr_templates = instruction_templates
-        
-        self._objects, self._instr = self._sample_task()
-        self._goal_obj = self._objects[0]
-        self._change_loc = change_loc_on_fix_goal
+        # Task progression for compositional generalisation must be provided (not all make sense)
+        self._tasks = task_prog
+        self._task_cnt = 0
+        self._task_id = self._tasks[self._task_cnt]
 
-        self._task_num = 0
-        self._resample_interval = resample_interval
-
-        if task_id == "go_to":
-            self._env = ShapesGoto(
-                objects=self._objects,
-                grid=grid,
-                feature_order=feature_order,
-                features=features,
-                store_path=store_path,
-                max_steps=max_steps,
-                default_feature=default_feature,
-                slip_chance=slip_chance,
-                seed=seed,
-                goal_channel=goal_channel,
-                obs_type=obs_type
-            )
-        elif task_id == "go_to_easy":
-            self._env = ShapesGotoEasy(
-                objects=self._objects,
-                grid=grid,
-                feature_order=feature_order,
-                features=features,
-                store_path=store_path,
-                max_steps=max_steps,
-                default_feature=default_feature,
-                slip_chance=slip_chance,
-                seed=seed,
-                goal_channel=goal_channel,
-                obs_type=obs_type
-            )
-        elif task_id == "pick_up":
-            pass
-        elif task_id == "retrieve":
-            pass
+        # We keep track of feature combinations the agent has already been trained on.
+        # There are two cases: when the goal object is a door and when the goal object is something else
+        self._all_obj_ftr_combs = deepcopy(obj_ftr_combs)
+        self._all_door_ftr_combs = deepcopy(door_ftr_combs)
+        if self._task_id == 'unlock':
+            self._remaining_ftr_combs = deepcopy(door_ftr_combs)
         else:
-            raise ValueError(f"Task id {task_id} not among the known ones.")
+            self._remaining_ftr_combs = deepcopy(obj_ftr_combs)
+        self._sampled_ftr_combs = []
+
+        self._features = features
+        self._task_templates = task_templates
+        
+        objects, doors, self._instr = self._sample_task(reuse_goal=False, task_id=self._task_id)
+        
+        self._task_num = 0
+        self.cmb_t = cmb_t
+        self.cmp_t = cmp_t
+
+        self._grid = grid
+        self._features = features
+        self._store_path = store_path
+        self._max_steps = max_steps
+        self._slip_chance = slip_chance
+        self._seed = seed
+
+        if self._task_id == "go_to":
+            constructor = ShapesGoto
+        elif self._task_id == "pick_up":
+            constructor = ShapesPickup
+        elif self._task_id == 'unlock':
+            constructor = ShapesUnlock
+        elif self._task_id == "retrieve":
+            constructor = ShapesRetrieve
+        else:
+            raise ValueError(f"Task id {self._task_id} not among the known ones.")
+        
+        self._env: Shapes = constructor(
+                objects=objects,
+                doors=doors,
+                grid=self._grid,
+                features=self._features,
+                store_path=self._store_path,
+                max_steps=self._max_steps,
+                slip_chance=self._slip_chance,
+                seed=self._seed
+            )
 
         self._observation_space = spaces.Dict({
             "features": self._env.observation_space,
@@ -162,96 +178,167 @@ class MultitaskShapes(gym.Env):
         return self._env.agent_location
     
     @property
-    def goal_list(self) -> List:
-        return deepcopy(self._allowed_objects)
-    
-    def set_resample_interval(self, interval:int) -> None:
-        self._resample_interval = interval
+    def goal(self):
+        return self._env.goal
 
-    def _sample_objects(self, candidates, n, loc_key='loc', goal:Dict=None):
-        seen_locs = set()
-        seen_others = set()
-        sampled = []
+    def _sample_doors(self, reuse_goal:bool, task_id:int):
+        sampled_doors = []
+        goal = None
+        
+        if task_id == 'unlock':
+            if reuse_goal:
+                # Doors are mutable, safer to create a new Shape
+                goal = Door(colour=self.goal.colour, is_goal=True)
+            else:
+                idx = self.rng.integers(0, len(self._remaining_ftr_combs))
+                goal_ftr_comb = self._remaining_ftr_combs.pop(idx)
+                goal = Door(colour=goal_ftr_comb.colour, is_goal=True)
+            sampled_doors.append(goal)
+        else:
+            # Goal will be sampled later, when objects are sampled
+            pass
 
-        # Use the same shape as a goal, but resample its location
-        if goal is not None:
-            if loc_key not in goal:
-                candidates_cpy = deepcopy(candidates)
-                goal_candidates = []
-                
-                cand: Dict
-                for cand in candidates_cpy:
-                    # Strip each candidate of irrelevant keys
-                    loc = cand.pop(loc_key)
-                    
-                    if cand == goal:
-                        cand[loc_key] = loc
-                        goal_candidates.append(cand)
-                
-                self.rng.shuffle(goal_candidates)
-                goal = goal_candidates[0]
+        while len(sampled_doors) < self._num_doors:
+            idx = self.rng.integers(0, len(self._all_door_ftr_combs))
+            door_comb = self._all_door_ftr_combs[idx]
+            door = Door(colour=door_comb.colour)
             
-            sampled.append(goal)
-            seen_locs.add(goal[loc_key])
-            others = tuple(sorted((k, v) for k, v in goal.items() if k != loc_key and k != "is_goal"))
+            if door not in sampled_doors:
+                sampled_doors.append(door)
+            else:
+                del door
+        
+        self.rng.shuffle(sampled_doors)
+        return sampled_doors, goal
+
+    def _sample_objects(self, reuse_goal:bool, task_id:int, doors: List[Door]):
+        goal = None
+        sampled_objs = []
+        if task_id != 'unlock':
+            if reuse_goal:
+                # Shapes are mutable, safer to create a new Shape
+                goal = Shape(shape=self.goal.shape, colour=self.goal.colour, is_goal=True)
+            else:
+                idx = self.rng.integers(0, len(self._remaining_ftr_combs))
+                goal_ftr_comb = self._remaining_ftr_combs.pop(idx)
+                goal = Shape(shape=goal_ftr_comb.shape, colour=goal_ftr_comb.colour, is_goal=True)
+            sampled_objs.append(goal)
+        else:
+            # Door is the goal, it will have been sampled already
+            pass
+
+        # Important keys that unlock doors
+        sampled_keys = []
+        for door in doors:
+            key = Shape(shape="key", colour=door.colour)
+            # If the key that unlocks a door is itself a goal, put it into the corresponding list
+            if goal is not None and key == goal:
+                sampled_objs.remove(goal)
+                sampled_keys.append(goal)
+            else:
+                sampled_keys.append(key)
+        
+        # Sampled objects can be keys (but that unlock no doors!)
+        while len(sampled_objs) + len(sampled_keys) < self._num_objs:
+            idx = self.rng.integers(0, len(self._all_obj_ftr_combs))
+            obj_template = self._all_obj_ftr_combs[idx]
+            obj = Shape(shape=obj_template.shape, colour=obj_template.colour)
             
-            seen_others.add(others)
-
-        indices = list(range(len(candidates)))
-        self.rng.shuffle(indices)
-
-        if len(sampled) == n:
-            return sampled
-
-        for idx in indices:
-            d = candidates[idx]
-            loc = d[loc_key]
-            others = tuple(sorted((k, v) for k, v in d.items() if k != loc_key and k != "is_goal"))
-
-            if loc in seen_locs or others in seen_others:
-                continue
-
-            sampled.append(d)
-            seen_locs.add(loc)
-            seen_others.add(others)
-
-            if len(sampled) == n:
-                break
+            if obj not in sampled_objs and obj not in sampled_keys:
+                sampled_objs.append(obj)
+            else:
+                del obj
         
-        for sample in sampled:
-            if "is_goal" in sample:
-                d.pop("is_goal")
+        self.rng.shuffle(sampled_objs)
+        self.rng.shuffle(sampled_keys)
 
-        return deepcopy(sampled)
+        # The key must not spawn behind the door it unlocks. Since order of objects matters 
+        # (they are placed in order by traversing the map from the top left corner). We must ensure that keys are reachable.
+        # self._key_mask assures that by preserving which indices in the object list must be keys.
+        assert(len(sampled_objs) + len(sampled_keys) == len(self._key_mask))
+        ordered_objs = []
+        for key_indicator in self._key_mask:
+            obj: Shape
+            if key_indicator:
+                obj = sampled_keys.pop()
+            else:
+                obj = sampled_objs.pop()
+            ordered_objs.append(obj)
+            
+        assert(len(sampled_objs) == 0)
+        assert(len(sampled_keys) == 0)
+        return ordered_objs, goal
 
-    def _sample_task(self, goal:Dict=None) -> List:
-        if goal is not None and "is_goal" in goal:
-            goal.pop("is_goal")
+    def _sample_task(self, reuse_goal:bool, task_id:int) -> List:
+        doors, door_goal = self._sample_doors(reuse_goal=reuse_goal, task_id=task_id)
+        objects, obj_goal = self._sample_objects(reuse_goal=reuse_goal, task_id=task_id, doors=doors)
         
-        objects = self._sample_objects(candidates=self.goal_list, n=self._num_objects, goal=goal)
-        instr = self.rng.choice(self._instr_templates)
-        instr = generate_instruction(instr=instr, goal=objects[0], all_feature_keys=self._features.keys())
+        if task_id == 'unlock':
+            goal = door_goal
+        else:
+            goal = obj_goal
         
-        objects[0]["is_goal"] = True
-        self.rng.shuffle(objects)
+        assert(goal is not None)
 
-        return objects, instr
+        instr = self.rng.choice(self._task_templates[self._task_id])
+
+        instr = generate_instruction(instr=instr, goal=goal)
+        return objects, doors, instr
     
     def reset(self, seed=None, options: Optional[dict]={}):
         self._task_num += 1
-        if "goal" in options:
-            goal = deepcopy(options["goal"])
-            self._objects, self._instr = self._sample_task(goal=goal)
-        else:
-            if self._task_num % self._resample_interval == 0:
-                self._objects, self._instr = self._sample_task()
-            else:
-                goal = deepcopy(self._objects[0])
-                if self._change_loc:
-                    goal.pop("loc")
-                self._objects, self._instr = self._sample_task(goal=goal)
         
-        _, info = self._env.reset(seed, options={"objects": self._objects})
+        resample_goal = options.get("resample_goal", False)
+        resample_goal = resample_goal or self._task_num % self.cmb_t == 0
+
+        resample_task = options.get("resample_task", False)
+        resample_task = resample_task or self._task_num % self.cmp_t == 0
+
+        done = False
+        if resample_task:
+            self._task_cnt += 1
+            if self._task_cnt < len(self._tasks):
+                self._task_id = self._tasks[self._task_cnt]
+                if self._task_id == 'unlock':
+                    self._remaining_ftr_combs = deepcopy(self._all_door_ftr_combs)
+                else:
+                    self._remaining_ftr_combs = deepcopy(self._all_obj_ftr_combs)
+                self._sampled_ftr_combs = []
+            else:
+                done = True
+        
+        objects, doors, self._instr = self._sample_task(reuse_goal=not resample_goal, task_id=self._task_id)
+        
+        if self._task_id == "go_to":
+            constructor = ShapesGoto
+        elif self._task_id == "pick_up":
+            constructor = ShapesPickup
+        elif self._task_id == 'unlock':
+            constructor = ShapesUnlock
+        elif self._task_id == "retrieve":
+            constructor = ShapesRetrieve
+        else:
+            raise ValueError(f"Task id {self._task_id} not among the known ones.")
+        
+        self._env = constructor(
+                objects=objects,
+                doors=doors,
+                grid=self._grid,
+                features=self._features,
+                store_path=self._store_path,
+                max_steps=self._max_steps,
+                slip_chance=self._slip_chance,
+                seed=seed
+            )
+
+        info = {
+            "task_num": self._task_num,
+            "task_id": self._task_id,
+            "instruction": self._instr,
+            "goal": str(self.goal),
+            "done": done
+        }
+
         return self.obs, info
     
     def step(self, action):
@@ -265,34 +352,48 @@ class MultitaskShapes(gym.Env):
         self._env.store_frame(plot_name=plot_name)
 
 
-# TODO: Remove this comment. Shapes multitask factory splitting train/test sets based on *some* criteria. See your notebook.
 class ShapesMultitaskFactory(ABC):
     def __init__(self, hparams: Dict, store_path:str):
-        self._hparams = deepcopy(hparams)
+        self._hparams = hparams
         self._store_path = store_path
+
+        obj_train_set, door_train_set, obj_holdout_set, door_holdout_set = self._train_holdout_split()
         
-        self._train_set, self._holdout_set = self._train_holdout_split(grid=hparams["grid"])
+        self._obj_train_set = obj_train_set
+        self._door_train_set = door_train_set
+        self._obj_holdout_set = obj_holdout_set
+        self._door_holdout_set = door_holdout_set
+
     
     @abstractmethod
-    def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
+    def _train_holdout_split(self) -> Tuple[List]:
         pass
 
     def get_all_instructions(self):
         instructions = []
-        candidates = deepcopy(self._train_set)
-        candidates.extend(self._holdout_set)
         
-        for candidate in candidates:
-            for template in self._hparams[self._hparams["task_id"]]:
-                instr = generate_instruction(
-                    instr=template, 
-                    goal=candidate, 
-                    all_feature_keys=self._hparams["features"].keys()
-                )
-                instructions.append(instr)
+        obj_candidates = deepcopy(self._obj_train_set)
+        obj_candidates.extend(deepcopy(self._obj_holdout_set))
+        
+        door_candidates = deepcopy(self._door_train_set)
+        door_candidates.extend(deepcopy(self._door_holdout_set))
+
+        for task_id in self._hparams["task_progression"]:
+            if task_id == "unlock":
+                candidates = door_candidates
+            else:
+                candidates = obj_candidates
+            
+            for candidate in candidates:
+                for template in self._hparams["tasks"][task_id]:
+                    instr = generate_instruction(
+                        instr=template, 
+                        goal=candidate
+                    )
+                    instructions.append(instr)
         return list(set(instructions))
     
-    def get_env(self, set_id:str, purpose:str='TRAIN') -> MultitaskShapes:
+    def get_env(self, set_id:str) -> MultitaskShapes:
         """Generates MultitaskShapes environments split into train and holdout environments.
         Args:
             set_id (str): In {'TRAIN', 'HOLDOUT', 'HARD_HOLDOUT'}. 
@@ -302,66 +403,32 @@ class ShapesMultitaskFactory(ABC):
             MultitaskShapes
         """
         if set_id == 'TRAIN':
-            allowed_objects = self._train_set
+            obj_ftr_combs = self._obj_train_set
+            door_ftr_combs = self._door_train_set
         elif set_id == 'HOLDOUT':
-            allowed_objects = self._holdout_set
+            obj_ftr_combs = self._obj_holdout_set
+            door_ftr_combs = self._door_holdout_set
         else:
             raise ValueError(f'set_id={set_id} not in [TRAIN, HOLDOUT, HARD_HOLDOUT].')
         
-        # If we are using the environment for evaluation, we want to resample tasks on every episode
-        if purpose == 'EVAL':
-            resample_interval = 1
-        else:
-            resample_interval = self._hparams["resample_episodes"]
+        fetr_resample_t = self._hparams["fetr_resample_t"]
+        task_resample_t = self._hparams["task_resample_t"]
         
         env = MultitaskShapes(
-                allowed_objects=allowed_objects,
+                obj_ftr_combs=obj_ftr_combs,
+                door_ftr_combs=door_ftr_combs,
                 grid=self._hparams["grid"], 
-                task_id=self._hparams["task_id"], 
-                instruction_templates=self._hparams[self._hparams["task_id"]],
-                feature_order=self._hparams["use_features"], 
+                task_prog=self._hparams["task_progression"],
+                task_templates=self._hparams["tasks"],
+                cmb_t=fetr_resample_t,
+                cmp_t=task_resample_t,
                 features=self._hparams["features"],
-                num_objects=self._hparams["num_objects"], 
-                resample_interval= resample_interval, 
                 store_path=self._store_path, 
-                default_feature=self._hparams["default_feature"], 
                 max_steps=self._hparams["max_steps"], 
                 slip_chance=self._hparams["slip_chance"], 
-                goal_channel=self._hparams["goal_channel"], 
-                obs_type=self._hparams["obs_type"],
                 seed=self._hparams["seed"]
             )
         return env 
-
-
-# Test symbol grounding by reserving certain locations on the maps where goals can be spawned
-class ShapesPositionFactory(ShapesMultitaskFactory):
-
-    def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
-        grid = np.array(grid)
-        
-        train_positions = np.where(grid == ' ')
-        train_positions = list(zip(*train_positions))
-
-        holdout_positions = np.where(grid == 'T')
-        holdout_positions = list(zip(*holdout_positions))
-
-        use_features = set(self._hparams["use_features"])
-        train_features = deepcopy(self._hparams["features"])
-        holdout_features = deepcopy(self._hparams["features"])
-        keys_to_remove = [k for k in train_features if k not in use_features]
-        
-        for feature in keys_to_remove:
-            train_features.pop(feature)
-            holdout_features.pop(feature)
-        
-        train_features["loc"] = train_positions
-        holdout_features["loc"] = holdout_positions
-
-        train_candidates = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
-        holdout_candidates = [dict(zip(holdout_features.keys(), values)) for values in product(*holdout_features.values())]
-
-        return train_candidates, holdout_candidates
 
 
 # Test symbol grounding by reserving certain feature combinations
@@ -372,37 +439,30 @@ class ShapesAttrCombFactory(ShapesMultitaskFactory):
             self._holdout_combs = []
         super().__init__(hparams, store_path)
     
-    def _train_holdout_split(self, grid: List[List]) -> Tuple[List]:
-        grid = np.array(grid)
-        positions = np.where(grid == 'T')
-        positions = list(zip(positions[0], positions[1]))
-        if len(positions) == 0:
-            positions = np.where(grid == ' ')
-            positions = list(zip(positions[0], positions[1]))
+    def _train_holdout_split(self) -> Tuple[List]:
+        
+        obj_train_set = [] 
+        door_train_set = [] 
+        obj_holdout_set = [] 
+        door_holdout_set = []
 
-        use_features = set(self._hparams["use_features"])
-        train_features: Dict = deepcopy(self._hparams["features"])
-        keys_to_remove = [k for k in train_features if k not in use_features]
+        all_combs = [dict(zip(self._hparams["features"].keys(), values)) for values in product(*self._hparams["features"].values())]
         
-        for feature in keys_to_remove:
-            train_features.pop(feature)
-        
-        train_features["loc"] = positions
-        train_all = [dict(zip(train_features.keys(), values)) for values in product(*train_features.values())]
-        n_candidates = len(train_all)
-        
-        holdout_candidates = []
-        train_candidates = []
-        for candiadte in train_all:
-            c = deepcopy(candiadte)
-            c.pop("loc")
-            if c in self._holdout_combs:
-                holdout_candidates.append(candiadte)
+        for comb in all_combs:
+            if comb["shape"] == "door":
+                candidate = Door(colour=comb["colour"])
+                if comb not in self._holdout_combs:
+                    door_train_set.append(candidate)
+                else:
+                    door_holdout_set.append(candidate)
             else:
-                train_candidates.append(candiadte)
-        
-        assert(n_candidates == len(train_candidates) + len(holdout_candidates))
-        return train_candidates, holdout_candidates
+                candidate = Shape(colour=comb["colour"], shape=comb["shape"])
+                if comb not in self._holdout_combs:
+                    obj_train_set.append(candidate)
+                else:
+                    obj_holdout_set.append(candidate)
+      
+        return obj_train_set, door_train_set, obj_holdout_set, door_holdout_set
 
     
 if __name__ == "__main__":
