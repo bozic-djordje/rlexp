@@ -85,6 +85,14 @@ class MultitaskShapes(gym.Env):
 
         # Task progression for compositional generalisation must be provided (not all make sense)
         self._tasks = task_prog
+        # There is a specific task which teaches unlocking doors. Before it is learned, all doors spawn unlocked
+        self._door_lock_status = {}
+        unlock_task_found = False
+        for task_id in self._tasks:
+            if task_id == 'unlock':
+                unlock_task_found = True
+            self._door_lock_status[task_id] = unlock_task_found
+
         self._task_cnt = 0
         self._task_id = self._tasks[self._task_cnt]
 
@@ -203,7 +211,7 @@ class MultitaskShapes(gym.Env):
         while len(sampled_doors) < self._num_doors:
             idx = self.rng.integers(0, len(self._all_door_ftr_combs))
             door_comb = self._all_door_ftr_combs[idx]
-            door = Door(colour=door_comb.colour)
+            door = Door(colour=door_comb.colour, locked=self._door_lock_status[self._task_id])
             
             if door not in sampled_doors:
                 sampled_doors.append(door)

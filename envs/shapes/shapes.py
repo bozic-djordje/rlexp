@@ -98,10 +98,10 @@ class Shape(SalientObj):
         
 
 class Door(SalientObj):
-    def __init__(self, colour, is_goal:bool=False):
+    def __init__(self, colour, is_goal:bool=False, locked:bool=True):
         super().__init__(is_goal=is_goal)
         self.colour = colour
-        self._locked = True
+        self._locked = locked
 
     def __eq__(self, value):
         return self.colour == value.colour
