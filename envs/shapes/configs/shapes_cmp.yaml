@@ -19,7 +19,7 @@ grid:
 
 max_steps: 200
 slip_chance: 0
-goal_resample_t: 1
+goal_resample_t: null
 task_resample_t: 1
 seed: 1
 
@@ -27,14 +27,7 @@ features:
   # ball, triangle, square, diamond, star, key
   shape: [ball, key, door]
   # red, blue, green, yellow
-  colour: [red, blue, green, yellow]
-
-# can contain keys and doors
-reserved_combinations:
-  - shape: key
-    colour: red
-  - shape: ball
-    colour: green
+  colour: [red, blue]
 
 task_progression: [go_to, pick_up, unlock, retrieve]
 tasks:

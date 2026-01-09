@@ -20,7 +20,7 @@ grid:
 max_steps: 200
 slip_chance: 0
 goal_resample_t: 1
-task_resample_t: 1
+task_resample_t: null
 seed: 1
 
 features:
@@ -36,7 +36,7 @@ reserved_combinations:
   - shape: ball
     colour: green
 
-task_progression: [go_to, pick_up, unlock, retrieve]
+task_progression: [go_to]
 tasks:
   go_to: [Go to colour shape]
   pick_up: [Pick up colour shape]

@@ -67,7 +67,7 @@ def create_synonyms(goal: Union[Shape|Door], templates: List, synonyms: Dict) ->
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  cmb_t:int, cmp_t:int, store_path:str, max_steps:int=None, slip_chance:float=0, seed:int=0):
+    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, max_steps:int=None, slip_chance:float=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
         self._num_objs = np.equal(np.array(grid), 'O').sum() + np.equal(np.array(grid), 'K').sum()
         self._num_doors = np.equal(np.array(grid), 'D').sum()
@@ -104,8 +104,10 @@ class MultitaskShapes(gym.Env):
         objects, doors, self._instr = self._sample_task(reuse_goal=False, task_id=self._task_id)
         
         self._task_num = 0
-        self.cmb_t = cmb_t
-        self.cmp_t = cmp_t
+        self.goal_rsmpl_t = goal_rsmpl_t
+        self._goal_rsmpl = False if self.goal_rsmpl_t is None else True
+        self.task_rsmpl_t = task_rsmpl_t
+        self._task_rsmpl = False if self.task_rsmpl_t is None else True
 
         self._grid = grid
         self._features = features
@@ -289,13 +291,15 @@ class MultitaskShapes(gym.Env):
         self._task_num += 1
         
         resample_goal = options.get("resample_goal", False)
-        resample_goal = resample_goal or self._task_num % self.cmb_t == 0
+        resample_goal = resample_goal or (self._goal_rsmpl and self._task_num % self.goal_rsmpl_t == 0)
 
         resample_task = options.get("resample_task", False)
-        resample_task = resample_task or self._task_num % self.cmp_t == 0
+        resample_task = resample_task or (self._task_rsmpl and self._task_num % self.task_rsmpl_t == 0)
 
         done = False
         if resample_task:
+            # We need to resample the goal because some tasks target doors and some shapes
+            resample_goal = True
             self._task_cnt += 1
             if self._task_cnt < len(self._tasks):
                 self._task_id = self._tasks[self._task_cnt]
@@ -411,7 +415,7 @@ class ShapesMultitaskFactory(ABC):
         else:
             raise ValueError(f'set_id={set_id} not in [TRAIN, HOLDOUT, HARD_HOLDOUT].')
         
-        fetr_resample_t = self._hparams["fetr_resample_t"]
+        goal_resample_t = self._hparams["goal_resample_t"]
         task_resample_t = self._hparams["task_resample_t"]
         
         env = MultitaskShapes(
@@ -420,8 +424,8 @@ class ShapesMultitaskFactory(ABC):
                 grid=self._hparams["grid"], 
                 task_prog=self._hparams["task_progression"],
                 task_templates=self._hparams["tasks"],
-                cmb_t=fetr_resample_t,
-                cmp_t=task_resample_t,
+                goal_rsmpl_t=goal_resample_t,
+                task_rsmpl_t=task_resample_t,
                 features=self._hparams["features"],
                 store_path=self._store_path, 
                 max_steps=self._hparams["max_steps"], 
@@ -434,7 +438,7 @@ class ShapesMultitaskFactory(ABC):
 # Test symbol grounding by reserving certain feature combinations
 class ShapesAttrCombFactory(ShapesMultitaskFactory):
     def __init__(self, hparams, store_path):
-        self._holdout_combs = hparams["reserved_combinations"]
+        self._holdout_combs = hparams.get("reserved_combinations", [])
         if self._holdout_combs is None:
             self._holdout_combs = []
         super().__init__(hparams, store_path)
@@ -470,7 +474,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     script_path = os.path.abspath(__file__)
-    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="shapes")
+    store_path, yaml_path = setup_artefact_paths(script_path=script_path, config_name="shapes_cmp")
     
     import yaml
     with open(yaml_path, 'r') as file:
