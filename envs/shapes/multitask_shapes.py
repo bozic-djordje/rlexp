@@ -111,7 +111,7 @@ class MultitaskShapes(gym.Env):
         
         objects, doors, self._instr = self._sample_task(reuse_goal=False, task_id=self._task_id)
         
-        self._task_num = 0
+        self._episode_num = 0
         self.goal_rsmpl_t = goal_rsmpl_t
         self._goal_rsmpl = False if self.goal_rsmpl_t is None else True
         self.task_rsmpl_t = task_rsmpl_t
@@ -150,14 +150,16 @@ class MultitaskShapes(gym.Env):
             "features": self._env.observation_space,
             "instr": spaces.Text(max_length=100)
             })
+        
+        self.done = False
 
     @property
     def instruction(self):
         return self._instr
     
     @property
-    def task_num(self):
-        return self._task_num
+    def task_id(self):
+        return self._task_id
 
     @property
     def obs(self) -> np.ndarray:
@@ -190,6 +192,17 @@ class MultitaskShapes(gym.Env):
     @property
     def goal(self):
         return self._env.goal
+
+    @property
+    def info(self):
+        info = {
+            "episode_num": self._episode_num,
+            "task_id": self._task_id,
+            "instruction": self._instr,
+            "goal": str(self.goal),
+            "tasks_exhausted": self.done
+        }
+        return info
 
     def _sample_doors(self, reuse_goal:bool, task_id:int):
         sampled_doors = []
@@ -296,15 +309,14 @@ class MultitaskShapes(gym.Env):
         return objects, doors, instr
     
     def reset(self, seed=None, options: Optional[dict]={}):
-        self._task_num += 1
+        self._episode_num += 1
         
         resample_goal = options.get("resample_goal", False)
-        resample_goal = resample_goal or (self._goal_rsmpl and self._task_num % self.goal_rsmpl_t == 0)
+        resample_goal = resample_goal or (self._goal_rsmpl and self._episode_num % self.goal_rsmpl_t == 0)
 
         resample_task = options.get("resample_task", False)
-        resample_task = resample_task or (self._task_rsmpl and self._task_num % self.task_rsmpl_t == 0)
+        resample_task = resample_task or (self._task_rsmpl and self._episode_num % self.task_rsmpl_t == 0)
 
-        done = False
         if resample_task:
             # We need to resample the goal because some tasks target doors and some shapes
             resample_goal = True
@@ -317,9 +329,7 @@ class MultitaskShapes(gym.Env):
                     self._remaining_ftr_combs = deepcopy(self._all_obj_ftr_combs)
                 self._sampled_ftr_combs = []
             else:
-                done = True
-        
-        objects, doors, self._instr = self._sample_task(reuse_goal=not resample_goal, task_id=self._task_id)
+                self.done = True
         
         if self._task_id == "go_to":
             constructor = ShapesGoto
@@ -332,30 +342,28 @@ class MultitaskShapes(gym.Env):
         else:
             raise ValueError(f"Task id {self._task_id} not among the known ones.")
         
-        self._env = constructor(
-                objects=objects,
-                doors=doors,
-                grid=self._grid,
-                features=self._features,
-                store_path=self._store_path,
-                max_steps=self._max_steps,
-                slip_chance=self._slip_chance,
-                seed=seed
-            )
+        try:
+            objects, doors, self._instr = self._sample_task(reuse_goal=not resample_goal, task_id=self._task_id)
+            self._env = constructor(
+                    objects=objects,
+                    doors=doors,
+                    grid=self._grid,
+                    features=self._features,
+                    store_path=self._store_path,
+                    max_steps=self._max_steps,
+                    slip_chance=self._slip_chance,
+                    seed=seed
+                )
+        except ValueError:
+            self.done = True
 
-        info = {
-            "task_num": self._task_num,
-            "task_id": self._task_id,
-            "instruction": self._instr,
-            "goal": str(self.goal),
-            "done": done
-        }
-
-        return self.obs, info
+        return self.obs, self.info
     
     def step(self, action):
         _, reward, is_terminal, truncated, info = self._env.step(action=action)
-        return self.obs, reward, is_terminal, truncated, info
+        superinfo = self.info
+        superinfo["success"] = info["success"]
+        return self.obs, reward, is_terminal, truncated, superinfo
         
     def render_frame(self) -> np.ndarray:
         return self._env.render_frame()
@@ -381,14 +389,22 @@ class ShapesMultitaskFactory(ABC):
     def _train_holdout_split(self) -> Tuple[List]:
         pass
 
-    def get_all_instructions(self):
+    def get_all_instructions(self, set_id="ALL"):
         instructions = []
         
-        obj_candidates = deepcopy(self._obj_train_set)
-        obj_candidates.extend(deepcopy(self._obj_holdout_set))
-        
-        door_candidates = deepcopy(self._door_train_set)
-        door_candidates.extend(deepcopy(self._door_holdout_set))
+        if set_id == "ALL" or set_id=="TRAIN":
+            obj_candidates = deepcopy(self._obj_train_set)
+            if set_id == "ALL":
+                obj_candidates.extend(deepcopy(self._obj_holdout_set))
+        elif set_id == "HOLDOUT":
+            obj_candidates = deepcopy(self._obj_holdout_set)
+
+        if set_id == "ALL" or set_id=="TRAIN":
+            door_candidates = deepcopy(self._door_train_set)
+            if set_id == "ALL":
+                door_candidates.extend(deepcopy(self._door_holdout_set))
+        elif set_id == "HOLDOUT":
+            door_candidates = deepcopy(self._door_holdout_set)
 
         for task_id in self._hparams["task_progression"]:
             if task_id == "unlock":
@@ -505,4 +521,4 @@ if __name__ == "__main__":
             next_obs, reward, terminated, truncated, _ = env.step(action)
             obs = next_obs
             done = terminated or truncated
-        env.store_frame(plot_name=f"final_step_multitask_{env.task_num}")
+        env.store_frame(plot_name=f"final_step_multitask_{env.task_id}")
