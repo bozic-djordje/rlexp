@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
@@ -47,6 +47,35 @@ class ScalarMix(torch.nn.Module):
         for weight, tensor in zip(normed_weights, tensors):
             pieces.append(weight * tensor)
         return self.gamma * sum(pieces)
+
+
+class LinearRegression(nn.Module):
+    def __init__(self, in_dim: int, bias: bool=False, device: torch.device = torch.device("cpu")):
+        super().__init__()
+        self.device = device
+        self.in_dim = int(in_dim)
+
+        self.linear = nn.Linear(
+            self.in_dim,
+            1,
+            bias=bias,
+            dtype=torch.float32
+        )
+        self.to(self.device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.unsqueeze(0) if x.dim() == 1 else x
+        return self.linear(x)
+
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.linear.weight.detach().clone()
+
+    @property
+    def bias(self) -> Optional[torch.Tensor]:
+        if self.linear.bias is None:
+            return None
+        return self.linear.bias.detach().clone()
 
 
 class FCTrunk(nn.Module):

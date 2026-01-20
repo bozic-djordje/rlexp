@@ -9,7 +9,7 @@ from tianshou.data import PrioritizedReplayBuffer, ReplayBuffer, Batch, Collecto
 from collections import defaultdict
 from gymnasium import Env
 from tqdm import tqdm
-from typing import Any, Dict, Callable, List, Tuple, Union
+from typing import Any, Dict, Callable, List, Optional, Tuple, Union
 import torch
 import numpy as np
 from collections import defaultdict
@@ -142,8 +142,12 @@ class EpsilonDecayHook(EpochHook):
         if not self.is_linear:
             delta = 1e-3
             self.k = -math.log(delta / (self.eps_start - self.eps_end)) / self.decay_steps
+        agent.set_eps(self.eps_start)
 
-    def hook(self, epoch: int, global_step: int):
+    def hook(self, epoch: int, global_step: int, logging_step:Optional[int]=None):
+        if logging_step is None:
+            logging_step = global_step
+        
         if global_step <= self.decay_steps:
             if self.is_linear:
                 epsilon = self.eps_start - (self.eps_start - self.eps_end) * (global_step / self.decay_steps)
@@ -153,7 +157,7 @@ class EpsilonDecayHook(EpochHook):
             epsilon = self.eps_end
 
         self.agent.set_eps(epsilon)
-        self.logger.write("train/env_step", global_step, {"epsilon": self.agent.eps})
+        self.logger.write("train/env_step", logging_step, {"epsilon": self.agent.eps})
 
 
 class BetaAnnealHook(EpochHook):

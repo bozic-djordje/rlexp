@@ -1,0 +1,65 @@
+general:
+  seed: 1
+
+# Experiment hyper-parameters may take a range of values in which case they will be
+# optimised with Optuna
+experiment: 
+  w_lr: 1e-3
+  psi_lr: 1e-3
+  lambda: 1e-6
+
+  psi_trunk_dim: [32, 32]
+  psi_head_dim: [19]
+
+  # Exploration rate parameters
+  epsilon_start: 0.8
+  epsilon_end: 0.05
+  epsilon_fraction: 0.6
+  test_epsilon: 0.05
+  linear_schedule: false
+
+# Environment hyper-parameters are fixed
+environment:
+  # grid:
+  #   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+  #   - ['W', 'W', 'W', 'O', 'W', 'W', 'W']
+  #   - ['W', 'K', 'W', 'D', 'W', 'K', 'W']
+  #   - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
+  #   - ['W', ' ', ' ', 'W', 'W', 'D', 'W']
+  #   - ['W', 'A', ' ', 'W', 'W', 'O', 'W']
+  #   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
+
+  grid:
+    - ['W', 'W', 'W', 'W', 'W']
+    - ['W', ' ', 'O', ' ', 'W']
+    - ['W', ' ', ' ', ' ', 'W']
+    - ['W', 'A', ' ', 'O', 'W']
+    - ['W', 'W', 'W', 'W', 'W']
+
+
+  max_steps: 40
+  disc_fact: 0.99
+  slip_chance: 0
+  goal_resample_t: 8000
+  task_resample_t: null
+  seed: 1
+
+  features:
+    # ball, triangle, square, diamond, star, key
+    shape: [ball, key, door]
+    # red, blue, green, yellow
+    colour: [red, blue, green, yellow]
+
+  # can contain keys and doors
+  reserved_combinations:
+    - shape: key
+      colour: red
+    - shape: ball
+      colour: green
+
+  task_progression: [go_to]
+  tasks:
+    go_to: [Go to colour shape]
+    pick_up: [Pick up colour shape]
+    unlock: [Unlock colour door]
+    retrieve: [Retrieve colour shape]
