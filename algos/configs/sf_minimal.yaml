@@ -6,10 +6,13 @@ general:
 experiment: 
   w_lr: 1e-3
   psi_lr: 1e-3
-  lambda: 1e-6
+  lambda: 1e-5
 
-  psi_trunk_dim: [32, 32]
-  psi_head_dim: [19]
+  psi_trunk_dim: []
+  psi_head_dim: [19, 19]
+
+  buffer_size: 10000
+  batch_size: 64
 
   # Exploration rate parameters
   epsilon_start: 0.8

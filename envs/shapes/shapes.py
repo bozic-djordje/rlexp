@@ -668,7 +668,7 @@ class ShapesGoto(Shapes):
 
         if self.map.agent_loc == self.map.goal_loc:
             is_terminal = True
-            reward = 10
+            reward = 1
         
         return obs, reward, is_terminal, truncated, info
 
@@ -683,7 +683,7 @@ class ShapesPickup(Shapes):
 
         if self.map.inventory_id == self.map.goal_id:
             is_terminal = True
-            reward = 10
+            reward = 1
         
         return obs, reward, is_terminal, truncated, info
     
@@ -698,7 +698,7 @@ class ShapesUnlock(Shapes):
 
         if not self.map.goal_locked:
             is_terminal = True
-            reward = 10
+            reward = 1
         
         return obs, reward, is_terminal, truncated, info
 
@@ -713,7 +713,7 @@ class ShapesRetrieve(Shapes):
 
         if self.map.inventory_id == self.map.goal_id and self.map.agent_loc == self.map.agent_start_loc:
             is_terminal = True
-            reward = 10
+            reward = 1
         
         return obs, reward, is_terminal, truncated, info
 

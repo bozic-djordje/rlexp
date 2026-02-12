@@ -57,10 +57,19 @@ class SFMinimal:
         return torch.cat([s, a_oh], dim=0)
 
     def _sa_batch(self, s):
-        s = s.flatten().float()
-        a_eye = torch.eye(self.max_a_num, device=self.device)
-        s_rep = s.unsqueeze(0).repeat(self.max_a_num, 1)
-        return torch.cat([s_rep, a_eye], dim=1)
+        s = torch.as_tensor(s, device=self.device).float()
+        if s.dim() == 1 or (s.dim() == 2 and s.shape[0] == 1):
+            s = s.flatten()
+            a_eye = torch.eye(self.max_a_num, device=self.device)
+            s_rep = s.unsqueeze(0).repeat(self.max_a_num, 1)
+            return torch.cat([s_rep, a_eye], dim=1)
+
+        if s.dim() > 2:
+            s = s.view(s.size(0), -1)
+        bsz = s.shape[0]
+        a_eye = torch.eye(self.max_a_num, device=self.device).unsqueeze(1).repeat(1, bsz, 1)
+        s_rep = s.unsqueeze(0).repeat(self.max_a_num, 1, 1)
+        return torch.cat([s_rep, a_eye], dim=2)
 
     def _init_task(self, instr):
         if instr in self.instr_map:
@@ -72,13 +81,13 @@ class SFMinimal:
         # If we had a previous task, we initialise new task with those parameters
         if task_idx > 0:
             prev_task_idx = task_idx - 1
-            self.psi_net.multihead.action_heads[task_idx].load_state_dict(
-                self.psi_net.multihead.action_heads[prev_task_idx].state_dict()
+            self.psi_net.multihead.heads[task_idx].load_state_dict(
+                self.psi_net.multihead.heads[prev_task_idx].state_dict()
             )
         
         # We have one optimiser per task, handling shared parameters as well
         psi_params = list(self.psi_net.trunk.parameters())
-        psi_params += list(self.psi_net.multihead.action_heads[task_idx].parameters())
+        psi_params += list(self.psi_net.multihead.heads[task_idx].parameters())
         self.psi_optim[instr] = torch.optim.Adam(psi_params, lr=self.psi_lr)
         
         self.r_hat[instr] = LinearRegression(in_dim=self.ftr_dim, device=self.device)
@@ -108,27 +117,57 @@ class SFMinimal:
         q_best = q_all.max(dim=1).values
         return int(torch.argmax(q_best).item())
     
-    def psi_update(self, instr, s, a, s_nxt, done) -> float:
+    def _to_batched_tensor(self, x, dtype, expand_dim:bool=True) -> torch.Tensor:
+        x = torch.as_tensor(x, device=self.device).to(dtype)
+        if expand_dim and x.dim() == 1:
+            x = x.unsqueeze(0)
+        return x
+    
+    def psi_update(self, batch) -> float:
+        instrs = batch.obs["instr"]
+        instr = instrs[0] if hasattr(instrs, "__len__") and not isinstance(instrs, str) else instrs
         self._init_task(instr=instr)
         task_idx = self.instr_map[instr]
 
-        # greedy next action a* under current w
-        w = self.r_hat[instr].weight.flatten()
-        with torch.no_grad():
-            sa_nxt_batch = self._sa_batch(s_nxt)
-            psi_nxt_all = self.psi_net(sa_nxt_batch)
-            # Predict with ALL previous skills
-            q_nxt_all = torch.matmul(psi_nxt_all, w)
-            q_nxt_all = q_nxt_all[:, :len(self.instr_map)]
-            # Pick the best action according to ALL previous skills
-            q_nxt = q_nxt_all.max(dim=1).values
-            a_greedy = int(torch.argmax(q_nxt).item())
-            # Evaluate the best action under the current skill
-            psi_nxt = psi_nxt_all[a_greedy, task_idx]
+        s_batch = self._to_batched_tensor(x=batch.obs["features"], dtype=torch.float32)
+        s_nxt_batch = self._to_batched_tensor(x=batch.obs_next["features"], dtype=torch.float32)
+        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.int64, expand_dim=False)
+        
+        a_onehot = torch.zeros(s_batch.size(0), self.max_a_num, device=self.device)
+        a_onehot.scatter_(1, a_batch.unsqueeze(1), 1.0)
+        sa = torch.cat([s_batch, a_onehot], dim=1)
 
-        sa = self._sa(s=s, a=a).unsqueeze(0)
-        psi_pred = self.psi_net(sa)[0, task_idx]
-        target = sa + (1 - int(done)) * self.gamma * psi_nxt
+        done = self._to_batched_tensor(x=batch.terminated, dtype=torch.bool, expand_dim=False)
+        if hasattr(batch, "truncated"):
+            done = done | self._to_batched_tensor(x=batch.truncated, dtype=torch.bool, expand_dim=False)
+        done = done.float()
+
+        w = self.r_hat[instr].weight.flatten()
+        
+        with torch.no_grad():
+            sa_nxt_batch = self._sa_batch(s_nxt_batch)
+            if sa_nxt_batch.dim() == 2:
+                psi_nxt_all = self.psi_net(sa_nxt_batch).unsqueeze(1)
+            else:
+                a_num, batch_dim, _ = sa_nxt_batch.shape
+                psi_nxt_all = self.psi_net(sa_nxt_batch.reshape(a_num * batch_dim, -1))
+                psi_nxt_all = psi_nxt_all.view(a_num, batch_dim, self.num_skills, -1)
+
+            # psi_nxt_all: (A, B, N, D), w: (D,) -> q_nxt_all: (A, B, N)
+            q_nxt_all = torch.matmul(psi_nxt_all, w)
+            # keep only seen skills: (A, B, N_seen)
+            q_nxt_all = q_nxt_all[:, :, :len(self.instr_map)]
+            # max over skills -> (A, B)
+            q_nxt = q_nxt_all.max(dim=2).values
+            # greedy action per batch element -> (B,)
+            a_greedy = torch.argmax(q_nxt, dim=0)
+            batch_idx = torch.arange(q_nxt.shape[1], device=self.device)
+            psi_nxt = psi_nxt_all[a_greedy, batch_idx, task_idx]
+            if psi_nxt.dim() == 1:
+                psi_nxt = psi_nxt.unsqueeze(0)
+
+        psi_pred = self.psi_net(sa)[:, task_idx, :]
+        target = sa + (1 - done).unsqueeze(1) * self.gamma * psi_nxt
         td = target - psi_pred
 
         loss = (td * td).mean()
@@ -136,35 +175,39 @@ class SFMinimal:
         opt.zero_grad()
         loss.backward()
         opt.step()
-        td_loss = float(loss.item())
-        
-        return td_loss
+        return float(loss.item())
 
-    def w_update(self, instr, s, a, r):
+    def w_update(self, batch) -> float:
+        instrs = batch.obs["instr"]
+        instr = instrs[0] if hasattr(instrs, "__len__") and not isinstance(instrs, str) else instrs
         self._init_task(instr=instr)
-        sa = self._sa(s=s, a=a)
 
-        pred = self.r_hat[instr](sa).squeeze()
+        s_batch = self._to_batched_tensor(x=batch.obs["features"], dtype=torch.float32)
+        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.int64, expand_dim=False)
+        
+        a_onehot = torch.zeros(s_batch.size(0), self.max_a_num, device=self.device)
+        a_onehot.scatter_(1, a_batch.unsqueeze(1), 1.0)
+        sa = torch.cat([s_batch, a_onehot], dim=1)
 
-        W = self.r_hat[instr].linear.weight
-        loss = (pred - r) ** 2 
+        r_t = self._to_batched_tensor(x=batch.rew, dtype=torch.float32)
+        
+        pred = self.r_hat[instr](sa).squeeze(-1)
+        loss = (pred - r_t) ** 2
+        loss = loss.mean()
         if self.lam is not None:
-            loss += self.lam * torch.abs(W).sum()
+            W = self.r_hat[instr].linear.weight
+            loss = loss + self.lam * torch.abs(W).sum()
 
         opt = self.r_optim[instr]
         opt.zero_grad()
         loss.backward()
         opt.step()
+        
         return float(loss.item())
     
-    def update(self, s, a, s_nxt, r, done) -> Tuple:
-        instr = s["instr"]
-        s_vec = torch.as_tensor(s["features"], device=self.device).flatten().float()
-        s_nxt_vec = torch.as_tensor(s_nxt["features"], device=self.device).flatten().float()
-        r_t = torch.as_tensor(r, device=self.device).float()
-        
-        psi_loss = self.psi_update(instr=instr, s=s_vec, a=a, s_nxt=s_nxt_vec, done=done)
-        w_loss = self.w_update(instr=instr, s=s_vec, a=a, r=r_t)
+    def update(self, batch) -> Tuple:
+        psi_loss = self.psi_update(batch=batch)
+        w_loss = self.w_update(batch=batch)
         return psi_loss, w_loss
     
     def state_dict(self) -> Dict[str, Any]:
@@ -228,7 +271,7 @@ class SFMinimal:
                 continue
             head_idx = self.instr_map[instr]
             psi_params = list(self.psi_net.trunk.parameters())
-            psi_params += list(self.psi_net.multihead.action_heads[head_idx].parameters())
+            psi_params += list(self.psi_net.multihead.heads[head_idx].parameters())
             opt = torch.optim.Adam(psi_params, lr=self.psi_lr)
             opt.load_state_dict(opt_state)
             self.psi_optim[instr] = opt
@@ -253,6 +296,7 @@ if __name__ == '__main__':
     from utils import setup_artefact_paths, setup_experiment
     from yaml_utils import load_yaml
     from torch.utils.tensorboard import SummaryWriter
+    from tianshou.data import ReplayBuffer, Batch
     from tianshou.utils import TensorboardLogger
     from algos.common import EpsilonDecayHook
     from envs.shapes.multitask_shapes import MultitaskShapes, ShapesAttrCombFactory
@@ -269,8 +313,7 @@ if __name__ == '__main__':
     env_hparams = hparams["environment"]
     seed = hparams["general"]["seed"]
 
-    device = "cpu"
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     writer = SummaryWriter(store_path)
@@ -305,6 +348,10 @@ if __name__ == '__main__':
         device=device
     )
 
+    buffer_size = exp_hparams.get("buffer_size", 10000)
+    batch_size = exp_hparams.get("batch_size", 32)
+    rb_by_instr = {instr: ReplayBuffer(size=buffer_size) for instr in all_instructions}
+
     episode_max_steps = 40 if env_hparams["max_steps"] is None else env_hparams["max_steps"]
     task_steps = episode_max_steps*env_hparams["goal_resample_t"]
     epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=task_steps, agent=agent, logger=logger)
@@ -330,7 +377,26 @@ if __name__ == '__main__':
             task_step += 1
             ret += r
             
-            psi_loss, w_loss = agent.update(s=s, a=a, s_nxt=s_next, r=r, done=done)
+            instr = s["instr"]
+            if instr not in rb_by_instr:
+                rb_by_instr[instr] = ReplayBuffer(size=buffer_size)
+            rb = rb_by_instr[instr]
+            
+            transition = Batch(
+                obs=s,
+                act=a,
+                obs_next=s_next,
+                rew=r,
+                terminated=is_terminal,
+                truncated=truncated,
+            )
+            rb.add(transition)
+
+            if len(rb) >= batch_size:
+                batch, _ = rb.sample(batch_size=batch_size)
+                psi_loss, w_loss = agent.update(batch=batch)
+            else:
+                psi_loss, w_loss = 0.0, 0.0
             epoch_hook.hook(epoch=None, global_step=task_step, logging_step=global_step)
 
             logger.write(
@@ -357,4 +423,3 @@ if __name__ == '__main__':
                     epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=task_steps, agent=agent, logger=logger)
             else:
                 s = s_next
-

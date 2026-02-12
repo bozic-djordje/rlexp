@@ -164,7 +164,7 @@ class FCMultiHead(nn.Module):
             self.flatten_input = False
             self.flat_in_dim = in_dim
 
-        self.action_heads = []
+        self.heads = []
         for _ in range(num_heads):
             modules = [
                 nn.Linear(self.flat_in_dim, h[0], dtype=torch.float32)
@@ -179,10 +179,10 @@ class FCMultiHead(nn.Module):
             
             if non_linear:
                 modules.pop()
-            self.action_heads.append(nn.Sequential(*modules))
+            self.heads.append(nn.Sequential(*modules))
 
         # Add separate heads
-        self.action_heads = nn.ModuleList(self.action_heads)
+        self.heads = nn.ModuleList(self.heads)
         self.to(self.device)
         
     def forward(self, x):
@@ -195,7 +195,7 @@ class FCMultiHead(nn.Module):
             x = x.view(x.size(0), -1)
         
         # Compute each head's output and stack along head dimension
-        head_outs = [head(x).unsqueeze(1) for head in self.action_heads]
+        head_outs = [head(x).unsqueeze(1) for head in self.heads]
         return torch.cat(head_outs, dim=1)
     
 
@@ -233,9 +233,14 @@ class FCTree(nn.Module):
         super(FCTree, self).__init__()
         self.device = device
 
-        self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, non_linear=non_linear, device=device)
-        # The trunk output size is the last hidden dim
-        trunk_output_dim = h_trunk[-1] if len(h_trunk) > 0 else in_dim
+        use_trunk = h_trunk is not None and len(h_trunk) > 0
+
+        if use_trunk:
+            self.trunk = FCTrunk(in_dim=in_dim, h=h_trunk, non_linear=non_linear, device=device)
+            trunk_output_dim = h_trunk[-1]
+        else:
+            self.trunk = nn.Identity()
+            trunk_output_dim = in_dim
 
         self.multihead = FCMultiHead(
             in_dim=trunk_output_dim,
