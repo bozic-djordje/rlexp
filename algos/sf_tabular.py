@@ -131,8 +131,9 @@ class SFTabular:
         if len(batch) < 1:
             return 0.0
 
-        td_loss = 0.0
-        n_updates = 0
+        gpi_loss = 0.0
+        mnt_loss = 0.0
+        mnt_n_updates = 0
 
         for transition in batch:
             instr_t = transition.obs["instr"]
@@ -174,8 +175,7 @@ class SFTabular:
             target_t = phi_sa + (1 - int(done)) * self.gamma * psi_boot_t
             td_t = target_t - self.psi_table[t_idx, s_idx, a_idx]
             self.psi_table[t_idx, s_idx, a_idx] += self.psi_lr * td_t
-            td_loss += float((td_t * td_t).mean().item())
-            n_updates += 1
+            gpi_loss += float((torch.sqrt(td_t * td_t)).mean().item())
 
             # ----- Maintenance update: if c != t then update psi_c under w_c -----
             if c_idx != t_idx:
@@ -190,10 +190,13 @@ class SFTabular:
                 target_c = phi_sa + (1 - int(done)) * self.gamma * psi_boot_c
                 td_c = target_c - self.psi_table[c_idx, s_idx, a_idx]
                 self.psi_table[c_idx, s_idx, a_idx] += self.psi_lr * td_c
-                td_loss += float((td_c * td_c).mean().item())
-                n_updates += 1
+                mnt_loss += float((torch.sqrt(td_c * td_c)).mean().item())
+                mnt_n_updates += 1
+        
+        gpi_loss /= max(1, len(batch))
+        mnt_loss /= max(1, mnt_n_updates)
 
-        return td_loss / max(1, n_updates)
+        return gpi_loss, mnt_loss
 
 
     def w_update(self, batch) -> float:
@@ -223,12 +226,12 @@ class SFTabular:
         loss.backward()
         opt.step()
         
-        return float(loss.item())
+        return float(torch.sqrt(loss).item())
     
     def update(self, batch) -> Tuple:
-        psi_loss = self.psi_update(batch=batch)
+        gpi_loss, mnt_loss = self.psi_update(batch=batch)
         w_loss = self.w_update(batch=batch)
-        return psi_loss, w_loss
+        return gpi_loss, mnt_loss, w_loss
     
     def state_dict(self) -> Dict[str, Any]:
         r_hat_state: List[Optional[Dict[str, Any]]] = [None] * self.num_skills
@@ -429,17 +432,18 @@ if __name__ == '__main__':
 
             if global_step >= warmup_steps:
                 batch, _ = rb.sample(batch_size=batch_size)
-                psi_loss, w_loss = agent.update(batch=batch)
+                gpi_loss, mnt_loss, w_loss = agent.update(batch=batch)
                 task_step += 1
             else:
-                psi_loss, w_loss = 0.0, 0.0
+                gpi_loss, mnt_loss, w_loss = 0.0, 0.0, 0.0
             epoch_hook.hook(epoch=None, global_step=task_step, logging_step=global_step)
 
             logger.write(
                 "train/epoch",
                 global_step,
                 {
-                    "psi_loss": psi_loss,
+                    "gpi_loss": gpi_loss,
+                    "mnt_loss": mnt_loss,
                     "w_loss": w_loss,
                     "task_idx": len(agent.instr_map),
                 }
