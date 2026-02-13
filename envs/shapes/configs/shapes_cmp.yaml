@@ -29,6 +29,8 @@ features:
   # red, blue, green, yellow
   colour: [red, blue]
 
+num_confounding_features: 2
+
 task_progression: [go_to, pick_up, unlock, retrieve]
 tasks:
   go_to: [Go to colour shape]

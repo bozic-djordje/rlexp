@@ -22,15 +22,6 @@ experiment:
 
 # Environment hyper-parameters are fixed
 environment:
-  # grid:
-  #   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
-  #   - ['W', 'W', 'W', 'O', 'W', 'W', 'W']
-  #   - ['W', 'K', 'W', 'D', 'W', 'K', 'W']
-  #   - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
-  #   - ['W', ' ', ' ', 'W', 'W', 'D', 'W']
-  #   - ['W', 'A', ' ', 'W', 'W', 'O', 'W']
-  #   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
-
   grid:
     - ['W', 'W', 'W', 'W']
     - ['W', 'O', ' ', 'W']
@@ -51,6 +42,8 @@ environment:
     shape: [ball, key, door]
     # red, blue, green, yellow
     colour: [red, blue, green, yellow]
+  
+  num_confounding_features: 0
 
   # can contain keys and doors
   reserved_combinations:

@@ -29,6 +29,8 @@ features:
   # red, blue, green, yellow
   colour: [red, blue, green, yellow]
 
+num_confounding_features: 0
+
 # can contain keys and doors
 reserved_combinations:
   - shape: key

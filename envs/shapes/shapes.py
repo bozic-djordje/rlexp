@@ -10,13 +10,17 @@ from utils import load_and_resize_png, overlay_with_alpha
 
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+RND_FTR_RNG = 4
 
 
 class SalientObj:
+    rng = np.random.default_rng(RND_FTR_RNG)
+
     def __init__(self, is_goal:bool=False):
         self._loc = None
         self._id = None
         self._ftr_name_to_val = None
+        self.cnfd_ftrs = {}
         self.is_goal = is_goal
 
         # TODO: At some point in the future implement string redouts of events that have happened.
@@ -36,10 +40,12 @@ class SalientObj:
     def unique_id(self):
         return self._id
     
-    def activate(self, loc: Tuple, unique_id: int, ftr_name_to_val: Dict):
+    def activate(self, loc: Tuple, unique_id: int, ftr_name_to_val: Dict, n_confound_ftrs:int=0):
         self._loc = loc
         self._id = unique_id
         self._ftr_name_to_val = ftr_name_to_val
+        self.cnfd_ftrs = {f"random_feature_{i}": SalientObj.rng.integers(0, RND_FTR_RNG) 
+                                 for i in range(n_confound_ftrs)}
 
     @property
     @abstractmethod
@@ -196,7 +202,7 @@ DEFAULT_DOORS = [
 
 
 class GameMap:
-    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, seed:int=0):
+    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, n_confound_ftrs:int=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._walls = []
@@ -215,9 +221,13 @@ class GameMap:
                 self.ftr_name_to_val[name] = idx+1
 
         # repr_vec - a factored state observed by the agent
-        self._obs = np.zeros(5*len(objects) + 4*len(doors) + 2, dtype=np.uint8)
-        self._door_idxs_start = len(objects)*5
-        self._agent_idxs_start = len(objects)*5 + len(doors)*4
+        self.n_cnfd_ftrs = n_confound_ftrs
+        self.n_obj_ftrs = 5 + n_confound_ftrs
+        self.n_door_ftrs = 4 + n_confound_ftrs
+
+        self._obs = np.zeros(self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors) + 2, dtype=np.uint8)
+        self._door_idxs_start = self.n_obj_ftrs*len(objects)
+        self._agent_idxs_start = self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors)
         
         obj_idx = 0
         door_idx = 0
@@ -239,12 +249,15 @@ class GameMap:
                     self._obs[self._agent_idxs_start+1] = y
                 elif elem == 'O' or elem == 'K':
                     obj = self._objects[obj_idx]
-                    obj.activate(loc=(x,y), unique_id=obj_idx, ftr_name_to_val=self.ftr_name_to_val)
-                    self._obs[obj_idx*5] = x
-                    self._obs[obj_idx*5+1] = y
-                    self._obs[obj_idx*5+2] = obj.colour_feature
-                    self._obs[obj_idx*5+3] = obj.shape_feature
-                    self._obs[obj_idx*5+4] = int(obj.picked_up)
+                    obj.activate(loc=(x,y), unique_id=obj_idx, ftr_name_to_val=self.ftr_name_to_val, n_confound_ftrs=n_confound_ftrs)
+                    self._obs[obj_idx*self.n_obj_ftrs] = x
+                    self._obs[obj_idx*self.n_obj_ftrs+1] = y
+                    self._obs[obj_idx*self.n_obj_ftrs+2] = obj.colour_feature
+                    self._obs[obj_idx*self.n_obj_ftrs+3] = obj.shape_feature
+                    self._obs[obj_idx*self.n_obj_ftrs+4] = int(obj.picked_up)
+
+                    for i in range(n_confound_ftrs):
+                        self._obs[obj_idx*self.n_obj_ftrs+5+i] = obj.cnfd_ftrs[f"random_feature_{i}"]
                     
                     if obj.is_goal:
                         self._goal_object = obj
@@ -252,12 +265,15 @@ class GameMap:
                     obj_idx += 1
                 elif elem == 'D':
                     door = self._doors[door_idx]
-                    door.activate(loc=(x,y), unique_id=door_idx, ftr_name_to_val=self.ftr_name_to_val)
+                    door.activate(loc=(x,y), unique_id=door_idx, ftr_name_to_val=self.ftr_name_to_val, n_confound_ftrs=n_confound_ftrs)
                     self._door_locs.append((x,y))
-                    self._obs[self._door_idxs_start + door_idx*4] = x
-                    self._obs[self._door_idxs_start + door_idx*4+1] = y
-                    self._obs[self._door_idxs_start + door_idx*4+2] = door.colour_feature
-                    self._obs[self._door_idxs_start + door_idx*4+3] = int(door.locked)
+                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs] = x
+                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+1] = y
+                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+2] = door.colour_feature
+                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+3] = int(door.locked)
+
+                    for i in range(n_confound_ftrs):
+                        self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+4+i] = door.cnfd_ftrs[f"random_feature_{i}"]
 
                     if door.is_goal:
                         self._goal_object = door
@@ -312,18 +328,18 @@ class GameMap:
         return self._obs.copy()
     
     def object_id_to_obs_idx(self, unique_id:int):
-        obj_x = unique_id*5
-        obj_y = unique_id*5 + 1
-        obj_colour = unique_id*5 + 2
-        obj_shape = unique_id*5 + 3
-        obj_picked_up = unique_id*5 + 4
+        obj_x = unique_id*self.n_obj_ftrs
+        obj_y = unique_id*self.n_obj_ftrs + 1
+        obj_colour = unique_id*self.n_obj_ftrs + 2
+        obj_shape = unique_id*self.n_obj_ftrs + 3
+        obj_picked_up = unique_id*self.n_obj_ftrs + 4
         return obj_x, obj_y, obj_colour, obj_shape, obj_picked_up
 
     def door_id_to_obs_idx(self, unique_id:int):
-        obj_x = self._door_idxs_start + unique_id*4
-        obj_y = self._door_idxs_start + unique_id*4 + 1
-        obj_colour = self._door_idxs_start + unique_id*4 + 2
-        locked = self._door_idxs_start + unique_id*4 + 3
+        obj_x = self._door_idxs_start + unique_id*self.n_door_ftrs
+        obj_y = self._door_idxs_start + unique_id*self.n_door_ftrs + 1
+        obj_colour = self._door_idxs_start + unique_id*self.n_door_ftrs + 2
+        locked = self._door_idxs_start + unique_id*self.n_door_ftrs + 3
         return obj_x, obj_y, obj_colour, locked
 
     def move(self, loc:Tuple, act:str) -> bool:
@@ -497,7 +513,7 @@ class GameMap:
 
 
 class Shapes(gym.Env):
-    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, max_steps:int=None, slip_chance:float=0, seed:int=0):
+    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, seed:int=0):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         self._slip_chance = slip_chance
@@ -506,8 +522,9 @@ class Shapes(gym.Env):
         self._objects = deepcopy(objects)
         self._doors = deepcopy(doors)
         self._features = features
+        self._n_cnfd_ftrs = n_confound_ftrs
 
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, seed=seed)
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
         self.observation_space = gym.spaces.MultiDiscrete([10] * self.map.observation.shape[0])
 
         self._action_to_direction = {
@@ -582,7 +599,7 @@ class Shapes(gym.Env):
             doors = deepcopy(self._doors)
         grid = deepcopy(self._grid)
         
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, seed=seed)
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
         return self.obs, info
     
     def _movement(self, action) -> bool:
