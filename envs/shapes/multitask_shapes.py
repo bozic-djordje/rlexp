@@ -351,6 +351,7 @@ class MultitaskShapes(gym.Env):
                     doors=doors,
                     grid=self._grid,
                     features=self._features,
+                    n_confound_ftrs=self._n_cnfd_ftrs,
                     store_path=self._store_path,
                     max_steps=self._max_steps,
                     slip_chance=self._slip_chance,
