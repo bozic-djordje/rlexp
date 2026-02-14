@@ -10,7 +10,7 @@ from utils import load_and_resize_png, overlay_with_alpha
 
 
 ASSETS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-RND_FTR_RNG = 4
+RND_FTR_RNG = 2
 
 
 class SalientObj:
