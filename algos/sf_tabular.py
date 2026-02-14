@@ -29,14 +29,13 @@ class SFTabular:
         self.lam = lam
 
         self.max_a_num = self.action_space.n
-        self.ftr_dim = s_dim + self.max_a_num
+        self.ftr_dim = s_dim + 1
         self.psi_table = torch.zeros(
             (self.num_skills, 0, self.max_a_num, self.ftr_dim),
             device=self.device,
         )
         self.instr_map: Dict[str, int] = {}
         self.state_map: Dict[Tuple[float, ...], int] = {}
-        self.action_map: Dict[Any, int] = {i: i for i in range(self.max_a_num)}
 
         # Linear regression nn.Modules, indexed by instruction index.
         self.r_hat: List[Optional[LinearRegression]] = [None] * self.num_skills
@@ -47,9 +46,8 @@ class SFTabular:
         self.rng = torch.Generator().manual_seed(seed)
     
     def _sa(self, s, a):
-        a_oh = torch.zeros(self.max_a_num, device=self.device)
-        a_oh[int(a)] = 1.0
-        return torch.cat([s, a_oh], dim=0)
+        a_scalar = torch.tensor([float(int(a))], device=self.device)
+        return torch.cat([s, a_scalar], dim=0)
 
     def _state_key(self, s) -> Tuple[float, ...]:
         s = torch.as_tensor(s, device="cpu").flatten()
@@ -71,13 +69,11 @@ class SFTabular:
     def _action_idx(self, a) -> int:
         if isinstance(a, torch.Tensor):
             a = int(a.item())
-        if a in self.action_map:
-            return self.action_map[a]
-        idx = len(self.action_map)
-        if idx >= self.max_a_num:
-            raise ValueError(f"action_map exceeded: {idx + 1} > {self.max_a_num}")
-        self.action_map[a] = idx
-        return idx
+        else:
+            a = int(a)
+        if a < 0 or a >= self.max_a_num:
+            raise ValueError(f"action index out of bounds: {a}")
+        return a
 
     def _init_task(self, instr) -> int:
         if instr in self.instr_map:
@@ -205,11 +201,8 @@ class SFTabular:
         t_idx = self._init_task(instr=instr)
 
         s_batch = self._to_batched_tensor(x=batch.obs["features"], dtype=torch.float32)
-        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.int64, expand_dim=False).squeeze(-1)
-        
-        a_onehot = torch.zeros(s_batch.size(0), self.max_a_num, device=self.device)
-        a_onehot.scatter_(1, a_batch.unsqueeze(1), 1.0)
-        sa = torch.cat([s_batch, a_onehot], dim=1)
+        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.float32, expand_dim=False).reshape(-1, 1)
+        sa = torch.cat([s_batch, a_batch], dim=1)
 
         r_t = self._to_batched_tensor(x=batch.rew, dtype=torch.float32)
         
@@ -259,7 +252,6 @@ class SFTabular:
             "psi_table": self.psi_table,
             "instr_map": self.instr_map,
             "state_map": self.state_map,
-            "action_map": self.action_map,
             "r_hat": r_hat_state,
             "r_optim": r_optim_state,
             "max_a_num": self.max_a_num,
@@ -286,7 +278,6 @@ class SFTabular:
 
         self.instr_map = state.get("instr_map", {})
         self.state_map = state.get("state_map", {})
-        self.action_map = state.get("action_map", {i: i for i in range(self.max_a_num)})
 
         self.psi_table = state.get("psi_table")
         if self.psi_table is None:
@@ -366,13 +357,6 @@ if __name__ == '__main__':
     env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
     all_instructions = env_factory.get_all_instructions(set_id="TRAIN")
     num_tasks = len(all_instructions)
-
-    h_trunk = exp_hparams.get("psi_trunk_dim", (128,))
-    h_head = exp_hparams.get("psi_head_dim", (64,))
-    if not isinstance(h_trunk, (list, tuple)):
-        h_trunk = (h_trunk,)
-    if not isinstance(h_head, (list, tuple)):
-        h_head = (h_head,)
     
     agent = SFTabular(
         action_space=env.action_space,
