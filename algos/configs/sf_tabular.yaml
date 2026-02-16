@@ -6,7 +6,7 @@ general:
 experiment: 
   w_lr: 1e-3
   psi_lr: 1e-2
-  lambda: 1e-5
+  lambda: 1e-3
 
   warmup_steps: 1000
 
@@ -19,6 +19,8 @@ experiment:
   epsilon_fraction: 0.7
   test_epsilon: 0.05
   linear_schedule: false
+
+  action_mask: 3
 
 # Environment hyper-parameters are fixed
 environment:
@@ -33,7 +35,7 @@ environment:
   max_steps: 10
   disc_fact: 0.99
   slip_chance: 0
-  goal_resample_t: 2000
+  goal_resample_t: 8000
   task_resample_t: null
   seed: 1
 
@@ -43,14 +45,14 @@ environment:
     # red, blue, green, yellow
     colour: [red, blue, green, yellow]
   
-  num_confounding_features: 0
+  num_confounding_features: 1
 
   # can contain keys and doors
   reserved_combinations:
-    - shape: key
-      colour: red
-    - shape: ball
-      colour: green
+    # - shape: key
+    #   colour: red
+    # - shape: ball
+    #   colour: green
 
   task_progression: [go_to]
   tasks:

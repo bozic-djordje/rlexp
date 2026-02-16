@@ -12,6 +12,7 @@ class SFTabular:
             lam:float,
             num_skills:int,
             s_dim: int,
+            action_mask:int=0,
             gamma:float=0.99, 
             seed:int=1, 
             device:torch.device=torch.device("cpu")
@@ -28,7 +29,7 @@ class SFTabular:
         self.gamma = gamma
         self.lam = lam
 
-        self.max_a_num = self.action_space.n
+        self.max_a_num = self.action_space.n - action_mask
         self.ftr_dim = s_dim + 1
         self.psi_table = torch.zeros(
             (self.num_skills, 0, self.max_a_num, self.ftr_dim),
@@ -365,6 +366,7 @@ if __name__ == '__main__':
         lam=exp_hparams["lambda"],
         num_skills=num_tasks,
         s_dim=env.obs["features"].shape[0],
+        action_mask=exp_hparams["action_mask"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
         device=device
