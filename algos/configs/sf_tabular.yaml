@@ -6,7 +6,7 @@ general:
 experiment: 
   w_lr: 1e-3
   psi_lr: 1e-2
-  lambda: 1e-3
+  lambda: 1e-5
 
   warmup_steps: 1000
 
@@ -25,11 +25,11 @@ experiment:
 # Environment hyper-parameters are fixed
 environment:
   grid:
-    - ['W', 'W', 'W', 'W']
-    - ['W', 'O', ' ', 'W']
-    - ['W', ' ', ' ', 'W']
-    - ['W', 'A', 'O', 'W']
-    - ['W', 'W', 'W', 'W']
+    - ['W', 'W', 'W', 'W', 'W']
+    - ['W', 'O', ' ', ' ', 'W']
+    - ['W', ' ', 'A', ' ', 'W']
+    - ['W', ' ', ' ', 'O', 'W']
+    - ['W', 'W', 'W', 'W', 'W']
 
 
   max_steps: 10
@@ -46,6 +46,7 @@ environment:
     colour: [red, blue, green, yellow]
   
   num_confounding_features: 1
+  one_hot: True
 
   # can contain keys and doors
   reserved_combinations:

@@ -67,10 +67,12 @@ def create_synonyms(goal: Union[Shape|Door], templates: List, synonyms: Dict) ->
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, seed:int=0):
+    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, one_hot:bool=True, seed:int=0):
         self.rng = np.random.default_rng(seed)
         self._num_objs = np.equal(np.array(grid), 'O').sum() + np.equal(np.array(grid), 'K').sum()
         self._num_doors = np.equal(np.array(grid), 'D').sum()
+
+        self._one_hot = one_hot
 
         # Key mask tells us whether to generate a key or another shape when generating
         # the list of all objects for a specific task. Keys are treated as objects in all regards,
@@ -145,6 +147,7 @@ class MultitaskShapes(gym.Env):
                 store_path=self._store_path,
                 max_steps=self._max_steps,
                 slip_chance=self._slip_chance,
+                one_hot=self._one_hot,
                 seed=self._seed
             )
 
@@ -355,6 +358,7 @@ class MultitaskShapes(gym.Env):
                     store_path=self._store_path,
                     max_steps=self._max_steps,
                     slip_chance=self._slip_chance,
+                    one_hot=self._one_hot,
                     seed=seed
                 )
         except ValueError:
@@ -459,6 +463,7 @@ class ShapesMultitaskFactory(ABC):
                 store_path=self._store_path, 
                 max_steps=self._hparams["max_steps"], 
                 slip_chance=self._hparams["slip_chance"], 
+                one_hot=self._hparams["one_hot"],
                 seed=self._hparams["seed"]
             )
         return env 

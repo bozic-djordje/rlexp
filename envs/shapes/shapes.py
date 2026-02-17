@@ -202,7 +202,7 @@ DEFAULT_DOORS = [
 
 
 class GameMap:
-    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, n_confound_ftrs:int=0, seed:int=0):
+    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, n_confound_ftrs:int=0, one_hot:bool=True, seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._walls = []
@@ -210,13 +210,22 @@ class GameMap:
         self._doors: List[Door] = deepcopy(doors)
         self._door_locs: List[Tuple] = []
 
+        self._one_hot = one_hot
+
         grid_mat = np.array(grid)
         self._wall_mask = np.equal(grid_mat, 'W')
         self._door_mask = np.equal(grid_mat, 'D')
 
         # Map between feature names (e.g. blue) and their values in the observation space (e.g. 2)
         self.ftr_name_to_val = {}
-        for _, feature_names in features.items():
+        # Map between feature category (e.g. shape) and number of possible shapes. Door is not considered a shape.
+        self.ftr_category_to_range = {}
+        
+        for feature_category, feature_names in features.items():
+            self.ftr_category_to_range[feature_category] = len(feature_names)
+            if "door" in feature_names:
+                self.ftr_category_to_range[feature_category] -= 1
+            
             for idx, name in enumerate(feature_names):
                 self.ftr_name_to_val[name] = idx+1
 
@@ -224,10 +233,23 @@ class GameMap:
         self.n_cnfd_ftrs = n_confound_ftrs
         self.n_obj_ftrs = 5 + n_confound_ftrs
         self.n_door_ftrs = 4 + n_confound_ftrs
+        self.n_agent_ftrs = 2
 
-        self._obs = np.zeros(self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors) + 2, dtype=np.uint8)
+        self._obs = np.zeros(self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors) + self.n_agent_ftrs, dtype=np.uint8)
         self._door_idxs_start = self.n_obj_ftrs*len(objects)
         self._agent_idxs_start = self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors)
+        self._n_objects = len(objects)
+        self._n_doors = len(doors)
+
+        if self._one_hot:
+            if "colour" not in self.ftr_category_to_range or "shape" not in self.ftr_category_to_range:
+                raise ValueError("One-hot observations require both 'colour' and 'shape' feature categories.")
+
+            self._colour_ftr_range = self.ftr_category_to_range["colour"]
+            self._shape_ftr_range = self.ftr_category_to_range["shape"]
+            self._colour_eye = np.eye(self._colour_ftr_range, dtype=np.uint8)
+            self._shape_eye = np.eye(self._shape_ftr_range, dtype=np.uint8)
+            self._rnd_ftr_eye = np.eye(RND_FTR_RNG, dtype=np.uint8)
         
         obj_idx = 0
         door_idx = 0
@@ -325,7 +347,33 @@ class GameMap:
     
     @property
     def observation(self):
-        return self._obs.copy()
+        if not self._one_hot:
+            return self._obs.copy()
+
+        obj_obs = self._obs[:self._door_idxs_start].reshape(self._n_objects, self.n_obj_ftrs)
+        door_obs = self._obs[self._door_idxs_start:self._agent_idxs_start].reshape(self._n_doors, self.n_door_ftrs)
+
+        obj_colour_1h = self._colour_eye[obj_obs[:, 2].astype(np.int16) - 1]
+        obj_shape_1h = self._shape_eye[obj_obs[:, 3].astype(np.int16) - 1]
+        door_colour_1h = self._colour_eye[door_obs[:, 2].astype(np.int16) - 1]
+
+        if self.n_cnfd_ftrs > 0:
+            obj_cnfd_1h = self._rnd_ftr_eye[obj_obs[:, 5:].astype(np.int16)].reshape(
+                self._n_objects, self.n_cnfd_ftrs * RND_FTR_RNG
+            )
+            door_cnfd_1h = self._rnd_ftr_eye[door_obs[:, 4:].astype(np.int16)].reshape(
+                self._n_doors, self.n_cnfd_ftrs * RND_FTR_RNG
+            )
+        else:
+            obj_cnfd_1h = np.zeros((self._n_objects, 0), dtype=np.uint8)
+            door_cnfd_1h = np.zeros((self._n_doors, 0), dtype=np.uint8)
+
+        obj_encoded = np.concatenate((obj_obs[:, :2], obj_colour_1h, obj_shape_1h, obj_obs[:, 4:5], obj_cnfd_1h), axis=1)
+        door_encoded = np.concatenate((door_obs[:, :2], door_colour_1h, door_obs[:, 3:4], door_cnfd_1h), axis=1)
+
+        return np.concatenate(
+            (obj_encoded.reshape(-1), door_encoded.reshape(-1), self._obs[self._agent_idxs_start:].copy())
+        )
     
     def object_id_to_obs_idx(self, unique_id:int):
         obj_x = unique_id*self.n_obj_ftrs
@@ -513,10 +561,11 @@ class GameMap:
 
 
 class Shapes(gym.Env):
-    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, seed:int=0):
+    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, one_hot:bool=True, slip_chance:float=0, seed:int=0):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         self._slip_chance = slip_chance
+        self._one_hot = one_hot
 
         self._grid = deepcopy(grid)
         self._objects = deepcopy(objects)
@@ -524,7 +573,7 @@ class Shapes(gym.Env):
         self._features = features
         self._n_cnfd_ftrs = n_confound_ftrs
 
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, n_confound_ftrs=self._n_cnfd_ftrs, one_hot=self._one_hot, seed=seed)
         self.observation_space = gym.spaces.MultiDiscrete([10] * self.map.observation.shape[0])
 
         self._action_to_direction = {
@@ -599,7 +648,7 @@ class Shapes(gym.Env):
             doors = deepcopy(self._doors)
         grid = deepcopy(self._grid)
         
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, n_confound_ftrs=self._n_cnfd_ftrs, one_hot=self._one_hot, seed=seed)
         return self.obs, info
     
     def _movement(self, action) -> bool:

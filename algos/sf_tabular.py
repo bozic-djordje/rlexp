@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from typing import Any, Dict, List, Optional, Tuple
 from nets import LinearRegression
     
@@ -30,7 +31,7 @@ class SFTabular:
         self.lam = lam
 
         self.max_a_num = self.action_space.n - action_mask
-        self.ftr_dim = s_dim + 1
+        self.ftr_dim = s_dim + self.max_a_num
         self.psi_table = torch.zeros(
             (self.num_skills, 0, self.max_a_num, self.ftr_dim),
             device=self.device,
@@ -47,8 +48,10 @@ class SFTabular:
         self.rng = torch.Generator().manual_seed(seed)
     
     def _sa(self, s, a):
-        a_scalar = torch.tensor([float(int(a))], device=self.device)
-        return torch.cat([s, a_scalar], dim=0)
+        a_idx = self._action_idx(a)
+        a_onehot = torch.zeros(self.max_a_num, device=self.device, dtype=s.dtype)
+        a_onehot[a_idx] = 1.0
+        return torch.cat([s, a_onehot], dim=0)
 
     def _state_key(self, s) -> Tuple[float, ...]:
         s = torch.as_tensor(s, device="cpu").flatten()
@@ -202,8 +205,9 @@ class SFTabular:
         t_idx = self._init_task(instr=instr)
 
         s_batch = self._to_batched_tensor(x=batch.obs["features"], dtype=torch.float32)
-        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.float32, expand_dim=False).reshape(-1, 1)
-        sa = torch.cat([s_batch, a_batch], dim=1)
+        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.long, expand_dim=False).reshape(-1)
+        a_onehot = F.one_hot(a_batch, num_classes=self.max_a_num).to(dtype=torch.float32)
+        sa = torch.cat([s_batch, a_onehot], dim=1)
 
         r_t = self._to_batched_tensor(x=batch.rew, dtype=torch.float32)
         

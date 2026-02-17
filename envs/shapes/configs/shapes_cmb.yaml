@@ -30,6 +30,7 @@ features:
   colour: [red, blue, green, yellow]
 
 num_confounding_features: 0
+one_hot: True
 
 # can contain keys and doors
 reserved_combinations:
