@@ -8,8 +8,8 @@ experiment:
   psi_lr: 1e-2
   lambda: 1e-5
 
-  warmup_steps: 1000
-
+  warmup_steps: 100
+  # This is too large, should be like 10x smaller
   buffer_size: 10000
   batch_size: 64
 
@@ -25,28 +25,30 @@ experiment:
 # Environment hyper-parameters are fixed
 environment:
   grid:
-    - ['W', 'W', 'W', 'W', 'W']
-    - ['W', 'O', ' ', ' ', 'W']
-    - ['W', ' ', 'A', ' ', 'W']
-    - ['W', ' ', ' ', 'O', 'W']
-    - ['W', 'W', 'W', 'W', 'W']
+  - ['W', 'W', 'W', 'W', 'W']
+  - ['W', ' ', ' ', 'G', 'W']
+  - ['W', ' ', 'A', ' ', 'W']
+  - ['W', 'O', ' ', ' ', 'W']
+  - ['W', 'W', 'W', 'W', 'W']
 
 
-  max_steps: 10
+  max_steps: 20
   disc_fact: 0.99
   slip_chance: 0
-  goal_resample_t: 8000
+  goal_resample_t: 10000
   task_resample_t: null
   seed: 1
 
   features:
     # ball, triangle, square, diamond, star, key
-    shape: [ball, key, door]
+    shape: [ball, triangle, square, diamond, star, key]
     # red, blue, green, yellow
     colour: [red, blue, green, yellow]
-  
+
   num_confounding_features: 1
   one_hot: True
+
+  target_obj_spawn_likelihood: 0.5
 
   # can contain keys and doors
   reserved_combinations:
@@ -55,9 +57,10 @@ environment:
     # - shape: ball
     #   colour: green
 
-  task_progression: [go_to]
+  task_progression: [linear]
   tasks:
     go_to: [Go to colour shape]
     pick_up: [Pick up colour shape]
     unlock: [Unlock colour door]
     retrieve: [Retrieve colour shape]
+    linear: [Pick up colour shape]

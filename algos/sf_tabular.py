@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from typing import Any, Dict, List, Optional, Tuple
 from nets import LinearRegression
     
@@ -31,7 +30,9 @@ class SFTabular:
         self.lam = lam
 
         self.max_a_num = self.action_space.n - action_mask
-        self.ftr_dim = s_dim + self.max_a_num
+        # Reward is modelled from next-state features phi(s, a, s') := s'
+        # so both SFs and reward weights live in state-feature space.
+        self.ftr_dim = s_dim
         self.psi_table = torch.zeros(
             (self.num_skills, 0, self.max_a_num, self.ftr_dim),
             device=self.device,
@@ -47,12 +48,6 @@ class SFTabular:
         self.eps = None
         self.rng = torch.Generator().manual_seed(seed)
     
-    def _sa(self, s, a):
-        a_idx = self._action_idx(a)
-        a_onehot = torch.zeros(self.max_a_num, device=self.device, dtype=s.dtype)
-        a_onehot[a_idx] = 1.0
-        return torch.cat([s, a_onehot], dim=0)
-
     def _state_key(self, s) -> Tuple[float, ...]:
         s = torch.as_tensor(s, device="cpu").flatten()
         return tuple(s.tolist())
@@ -168,11 +163,11 @@ class SFTabular:
             # IMPORTANT: bootstrap through current task's SFs (psi_t), not the winner's SFs
             psi_boot_t = self.psi_table[t_idx, s_nxt_idx, a_gpi]       # (d,)
 
-            # Immediate feature vector phi(s,a,s') (or phi(s,a))
-            phi_sa = self._sa(s=s_vec, a=a_idx)  # (d,)
+            # Immediate feature vector phi(s,a,s') := s'
+            phi_sp = s_nxt_vec  # (d,)
 
             # ----- Update current task SFs: psi_t -----
-            target_t = phi_sa + (1 - int(done)) * self.gamma * psi_boot_t
+            target_t = phi_sp + (1 - int(done)) * self.gamma * psi_boot_t
             td_t = target_t - self.psi_table[t_idx, s_idx, a_idx]
             self.psi_table[t_idx, s_idx, a_idx] += self.psi_lr * td_t
             gpi_loss += float((torch.sqrt(td_t * td_t)).mean().item())
@@ -187,7 +182,7 @@ class SFTabular:
                 a_c = int(torch.argmax(q_c_sp).item())
                 psi_boot_c = self.psi_table[c_idx, s_nxt_idx, a_c]     # (d,)
 
-                target_c = phi_sa + (1 - int(done)) * self.gamma * psi_boot_c
+                target_c = phi_sp + (1 - int(done)) * self.gamma * psi_boot_c
                 td_c = target_c - self.psi_table[c_idx, s_idx, a_idx]
                 self.psi_table[c_idx, s_idx, a_idx] += self.psi_lr * td_c
                 mnt_loss += float((torch.sqrt(td_c * td_c)).mean().item())
@@ -204,15 +199,12 @@ class SFTabular:
         instr = instrs[0] if hasattr(instrs, "__len__") and not isinstance(instrs, str) else instrs
         t_idx = self._init_task(instr=instr)
 
-        s_batch = self._to_batched_tensor(x=batch.obs["features"], dtype=torch.float32)
-        a_batch = self._to_batched_tensor(x=batch.act, dtype=torch.long, expand_dim=False).reshape(-1)
-        a_onehot = F.one_hot(a_batch, num_classes=self.max_a_num).to(dtype=torch.float32)
-        sa = torch.cat([s_batch, a_onehot], dim=1)
+        s_next_batch = self._to_batched_tensor(x=batch.obs_next["features"], dtype=torch.float32)
 
         r_t = self._to_batched_tensor(x=batch.rew, dtype=torch.float32)
         
         model = self.r_hat[t_idx]
-        pred = model(sa).squeeze(-1)
+        pred = model(s_next_batch).squeeze(-1)
         loss = (pred - r_t) ** 2
         loss = loss.mean()
         if self.lam is not None:
@@ -326,6 +318,16 @@ class SFTabular:
                 opt.load_state_dict(r_optim_state[idx])
                 self.r_optim[idx] = opt
 
+
+def append_semantic_features(s, semantic_f):
+    if semantic_f is not None:
+        s_ftr = semantic_f(s["features"])
+    else:
+        s_ftr = s["features"]
+    s["features"] = s_ftr
+    return s
+
+
 if __name__ == '__main__':
     import os
     from tqdm import tqdm
@@ -360,8 +362,14 @@ if __name__ == '__main__':
         store_path=store_path
     )
     env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
+    SF_MASK = env._env.semantic_feature_mask_0
+    
     all_instructions = env_factory.get_all_instructions(set_id="TRAIN")
     num_tasks = len(all_instructions)
+    
+    s = env.obs
+    s = append_semantic_features(s, SF_MASK)
+    prev_instr = s["instr"]
     
     agent = SFTabular(
         action_space=env.action_space,
@@ -369,7 +377,7 @@ if __name__ == '__main__':
         psi_lr=exp_hparams["psi_lr"],
         lam=exp_hparams["lambda"],
         num_skills=num_tasks,
-        s_dim=env.obs["features"].shape[0],
+        s_dim=s["features"].shape[0],
         action_mask=exp_hparams["action_mask"],
         gamma=env_hparams["disc_fact"],
         seed=seed,
@@ -384,9 +392,6 @@ if __name__ == '__main__':
     task_steps = episode_max_steps*env_hparams["goal_resample_t"]
     epoch_hook = EpsilonDecayHook(hparams=exp_hparams, max_steps=task_steps, agent=agent, logger=logger)
 
-    s = env.obs
-    prev_instr = s["instr"]
-
     tasks_done = False
     done = False
     global_step = 0
@@ -400,6 +405,7 @@ if __name__ == '__main__':
         while not tasks_done:
             a = agent.forward(s=s)
             s_next, r, is_terminal, truncated, info = env.step(action=a)
+            s_next = append_semantic_features(s_next, SF_MASK)
             done = is_terminal or truncated
             
             global_step += 1
@@ -442,9 +448,12 @@ if __name__ == '__main__':
             if done:
                 pbar.update(1)
                 torch.save(agent.state_dict(), f'{store_path}/last_model.pth')
-                logger.write("train/epoch", global_step, {"return": ret})
-
+                if env._env.map.goal_object == env._env.desireable_obj:
+                    logger.write("train/epoch", global_step, {"return_present": ret})
+                else:
+                    logger.write("train/epoch", global_step, {"return_absent": ret})
                 s, info = env.reset()
+                s = append_semantic_features(s, SF_MASK)
                 tasks_done = info["tasks_exhausted"]
                 ret = 0
                 if s["instr"] != prev_instr:

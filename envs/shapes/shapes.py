@@ -256,6 +256,7 @@ class GameMap:
         
         self._actor: Actor = None
         self._goal_object: Union[Shape, Door] = None
+        self._terminal_map_loc = None
         
         for x in range(len(grid)):
             row = grid[x]
@@ -301,6 +302,9 @@ class GameMap:
                         self._goal_object = door
 
                     door_idx += 1
+                elif elem == 'G':
+                    self._terminal_map_loc = (x, y)
+
 
         # If agent starts at a random location
         if self._actor is None:
@@ -319,19 +323,23 @@ class GameMap:
         return tuple(self._actor.loc)
     
     @property
-    def goal(self):
+    def terminal_map_loc(self):
+        return self._terminal_map_loc
+    
+    @property
+    def goal_object(self):
         return deepcopy(self._goal_object)
     
     @property
-    def goal_loc(self):
+    def goal_object_loc(self):
         return tuple(self._goal_object.loc)
     
     @property
-    def goal_id(self):
+    def goal_object_id(self):
         return self._goal_object.unique_id
     
     @property
-    def goal_locked(self):
+    def goal_door_locked(self):
         return self._goal_object.locked
     
     @property
@@ -553,8 +561,8 @@ class GameMap:
             overlay_with_alpha(image, inventory_img, x_offset, y_offset)
         
         # Plot goal position
-        y0 = self.goal_loc[0] * cell_size
-        x0 = self.goal_loc[1] * cell_size
+        y0 = self.goal_object_loc[0] * cell_size
+        x0 = self.goal_object_loc[1] * cell_size
         x_offset = x0 + (cell_size - small_size) // 2
         y_offset = y0 + (cell_size - small_size) // 2
         overlay_with_alpha(image, goal_image, x_offset, y_offset)
@@ -622,8 +630,12 @@ class Shapes(gym.Env):
         return self.map.observation
     
     @property
-    def goal(self):
-        return self.map.goal
+    def goal_object(self):
+        return self.map.goal_object
+    
+    @property
+    def terminal_map_loc(self):
+        return self.map.terminal_map_loc
     
     def reset(self, seed: Optional[int]=None, options: Optional[dict]={}):
         """ Reset the environment and return the initial state number
@@ -732,12 +744,80 @@ class ShapesGoto(Shapes):
         is_terminal = False
         reward = -1
 
-        if self.map.agent_loc == self.map.goal_loc:
+        if self.map.agent_loc == self.map.goal_object_loc:
             is_terminal = True
             reward = 1
         
         return obs, reward, is_terminal, truncated, info
 
+
+class ShapesSemantic(Shapes):
+    def __init__(self, desireable_obj: Shape, spawned_object:Shape, doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, one_hot:bool=True, slip_chance:float=0, seed:int=0):
+        super().__init__([spawned_object], doors, grid, features, store_path, n_confound_ftrs, max_steps, one_hot, slip_chance, seed)
+        self.desireable_obj = desireable_obj
+        self.observation_space = gym.spaces.MultiDiscrete(
+            np.concatenate((self.observation_space.nvec, np.array([2, 2], dtype=self.observation_space.nvec.dtype)))
+        )
+        self.picked_up_just_now = 0
+
+    def semantic_feature_mask_0(self, obs):
+        at_terminal = int(self.map.agent_loc == self.terminal_map_loc)
+        at_goal_obj = int(self.map.agent_loc == self.map.goal_object_loc)
+        semantic_mask = np.array([at_terminal, at_goal_obj], dtype=obs.dtype)
+        return np.concatenate((obs, semantic_mask), axis=0)
+    
+    def semantic_feature_mask_1(self, obs):
+        at_terminal = int(self.map.agent_loc == self.terminal_map_loc)
+        at_goal_obj = int(self.map.agent_loc == self.map.goal_object_loc)
+        bias_term = 1.0
+
+        one_hot_colour = np.zeros(self.map.ftr_category_to_range["colour"], dtype=obs.dtype)
+        colour_idx = self.map.ftr_name_to_val[self.map.goal_object.colour] - 1
+        one_hot_colour[colour_idx] = 1
+
+        one_hot_shape = np.zeros(self.map.ftr_category_to_range["shape"], dtype=obs.dtype)
+        shape_idx = self.map.ftr_name_to_val[self.map.goal_object.shape] - 1
+        one_hot_shape[shape_idx] = 1     
+
+        one_hot_colour_gated = one_hot_colour * self.picked_up_just_now
+        one_hot_shape_gated = one_hot_shape * self.picked_up_just_now
+
+        semantic_mask = np.concatenate(
+            (
+                np.array([at_terminal, at_goal_obj, bias_term], dtype=obs.dtype),
+                one_hot_colour_gated,
+                one_hot_shape_gated,
+            ), axis=0
+        )
+        return np.concatenate((obs, semantic_mask), axis=0)
+    
+    def step(self, action):
+        obs, _, _, truncated, info = super().step(action)
+        
+        is_terminal = False
+        reward = -1
+        self.picked_up_just_now = 0
+
+        if self.map.agent_loc == self.terminal_map_loc:
+            is_terminal = True
+            reward = 3    
+        elif self.map.agent_loc == self.map.goal_object_loc:
+            # TODO: This is very hacky. There is no goal object in this Shapes task, but if we have only one object it will be interpreted by the map
+            # as the goal object so it is fine.
+            if self.map.goal_object == self.desireable_obj and not self.goal_object.picked_up:
+                reward = 12
+                self.map.pick_up()
+                self.picked_up_just_now = 1
+            elif (self.map.goal_object.colour == self.desireable_obj.colour or self.map.goal_object.shape == self.desireable_obj.shape) and not self.goal_object.picked_up:
+                reward = 6
+                self.map.pick_up()
+                self.picked_up_just_now = 1
+            # elif not self.goal_object.picked_up:
+            #     reward = -10
+            #     self.map.pick_up()
+            # self.picked_up_just_now = 1
+        return obs, reward, is_terminal, truncated, info
+    
 
 class ShapesPickup(Shapes):
     def step(self, action):
@@ -747,7 +827,7 @@ class ShapesPickup(Shapes):
         is_terminal = False
         reward = -1
 
-        if self.map.inventory_id == self.map.goal_id:
+        if self.map.inventory_id == self.map.goal_object_id:
             is_terminal = True
             reward = 1
         
@@ -762,7 +842,7 @@ class ShapesUnlock(Shapes):
         is_terminal = False
         reward = -1
 
-        if not self.map.goal_locked:
+        if not self.map.goal_door_locked:
             is_terminal = True
             reward = 1
         
@@ -777,7 +857,7 @@ class ShapesRetrieve(Shapes):
         is_terminal = False
         reward = -1
 
-        if self.map.inventory_id == self.map.goal_id and self.map.agent_loc == self.map.agent_start_loc:
+        if self.map.inventory_id == self.map.goal_object_id and self.map.agent_loc == self.map.agent_start_loc:
             is_terminal = True
             reward = 1
         
