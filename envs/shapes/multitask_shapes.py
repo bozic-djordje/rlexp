@@ -9,7 +9,7 @@ from gymnasium import spaces
 import random
 import re
 from copy import deepcopy
-from envs.shapes.shapes import Shapes, ShapesGoto, ShapesUnlock, ShapesPickup, ShapesRetrieve, ShapesSemantic, DEFAULT_OBJECTS, Shape, Door
+from envs.shapes.shapes import Shapes, ShapesGoto, ShapesUnlock, ShapesPickup, ShapesRetrieve, ShapesTerminal, Shape, Door
 
 
 def generate_instruction(instr: str, goal: Union[Door|Shape]) -> str:
@@ -67,12 +67,12 @@ def create_synonyms(goal: Union[Shape|Door], templates: List, synonyms: Dict) ->
 
 
 class MultitaskShapes(gym.Env):
-    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, one_hot:bool=True, seed:int=0):
+    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, featureset_id:int=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
         self._num_objs = np.equal(np.array(grid), 'O').sum() + np.equal(np.array(grid), 'K').sum()
         self._num_doors = np.equal(np.array(grid), 'D').sum()
 
-        self._one_hot = one_hot
+        self._featureset_id = featureset_id
 
         # Key mask tells us whether to generate a key or another shape when generating
         # the list of all objects for a specific task. Keys are treated as objects in all regards,
@@ -147,7 +147,7 @@ class MultitaskShapes(gym.Env):
                 store_path=self._store_path,
                 max_steps=self._max_steps,
                 slip_chance=self._slip_chance,
-                one_hot=self._one_hot,
+                featureset_id=self._featureset_id,
                 seed=self._seed
             )
 
@@ -300,7 +300,7 @@ class MultitaskShapes(gym.Env):
     def _sample_task(self, reuse_goal:bool, task_id:int) -> List:
         doors, door_goal = self._sample_doors(reuse_goal=reuse_goal, task_id=task_id)
         objects, obj_goal = self._sample_objects(reuse_goal=reuse_goal, task_id=task_id, doors=doors)
-        
+
         if task_id == 'unlock':
             goal = door_goal
         else:
@@ -358,7 +358,7 @@ class MultitaskShapes(gym.Env):
                     store_path=self._store_path,
                     max_steps=self._max_steps,
                     slip_chance=self._slip_chance,
-                    one_hot=self._one_hot,
+                    featureset_id=self._featureset_id,
                     seed=seed
                 )
         except ValueError:
@@ -379,13 +379,13 @@ class MultitaskShapes(gym.Env):
         self._env.store_frame(plot_name=plot_name)
 
 
-class MultitaskShapesLinear(gym.Env):
-    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, target_spawn_likelihood:float, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, one_hot:bool=True, seed:int=0):
+class MultitaskShapesTerminal(gym.Env):
+    def __init__(self, obj_ftr_combs: List, door_ftr_combs: List, grid:List[List], task_prog:List, task_templates:Dict, features:Dict,  goal_rsmpl_t:int, task_rsmpl_t:int, store_path:str, target_spawn_likelihood:float, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, featureset_id:int=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
         self._num_objs = np.equal(np.array(grid), 'O').sum() + np.equal(np.array(grid), 'K').sum()
         self._num_doors = np.equal(np.array(grid), 'D').sum()
 
-        self._one_hot = one_hot
+        self._featureset_id = featureset_id
 
         # Key mask tells us whether to generate a key or another shape when generating
         # the list of all objects for a specific task. Keys are treated as objects in all regards,
@@ -442,9 +442,9 @@ class MultitaskShapesLinear(gym.Env):
         self._slip_chance = slip_chance
         self._seed = seed
         
-        self._env: ShapesSemantic = ShapesSemantic(
+        self._env: ShapesTerminal = ShapesTerminal(
                 desireable_obj=objects[0],
-                spawned_object=objects[1],
+                spawned_objects=objects[1:],
                 doors=doors,
                 grid=self._grid,
                 features=self._features,
@@ -452,7 +452,7 @@ class MultitaskShapesLinear(gym.Env):
                 store_path=self._store_path,
                 max_steps=self._max_steps,
                 slip_chance=self._slip_chance,
-                one_hot=self._one_hot,
+                featureset_id=self._featureset_id,
                 seed=self._seed
             )
 
@@ -563,18 +563,16 @@ class MultitaskShapesLinear(gym.Env):
         cf = self.rng.random()
         if cf < self.target_spawn_likelihood:
             sampled_objs.append(Shape(shape=goal.shape, colour=goal.colour, is_goal=True))
-        else:
+        
+        while len(sampled_objs) < self._num_objs + 1:
             idx = self.rng.integers(0, len(self._all_obj_ftr_combs))
             ftr_comb = self._all_obj_ftr_combs[idx]
-            obj_candidate = Shape(shape=ftr_comb.shape, colour=ftr_comb.colour, is_goal=True)
-            
-            while obj_candidate == goal:
-                idx = self.rng.integers(0, len(self._all_obj_ftr_combs))
-                ftr_comb = self._all_obj_ftr_combs[idx]
-                obj_candidate = Shape(shape=ftr_comb.shape, colour=ftr_comb.colour, is_goal=True)
+            obj_candidate = Shape(shape=ftr_comb.shape, colour=ftr_comb.colour, is_goal=False)
 
-            sampled_objs.append(obj_candidate)
-            
+            if obj_candidate not in sampled_objs:
+                sampled_objs.append(obj_candidate)
+            else:
+                del obj_candidate
         return sampled_objs, goal
 
     def _sample_task(self, reuse_goal:bool, task_id:int) -> List:
@@ -618,9 +616,9 @@ class MultitaskShapesLinear(gym.Env):
         
         try:
             objects, doors, self._instr = self._sample_task(reuse_goal=not resample_goal, task_id=self._task_id)
-            self._env: ShapesSemantic = ShapesSemantic(
+            self._env: ShapesTerminal = ShapesTerminal(
                 desireable_obj=objects[0],
-                spawned_object=objects[1],
+                spawned_objects=objects[1:],
                 doors=doors,
                 grid=self._grid,
                 features=self._features,
@@ -628,7 +626,7 @@ class MultitaskShapesLinear(gym.Env):
                 store_path=self._store_path,
                 max_steps=self._max_steps,
                 slip_chance=self._slip_chance,
-                one_hot=self._one_hot,
+                featureset_id=self._featureset_id,
                 seed=self._seed
             )
         except ValueError:
@@ -722,7 +720,7 @@ class ShapesMultitaskFactory(ABC):
 
         # TODO: This is a disgusting hack. Hopefully temporary.
         if self._hparams["task_progression"][0] == 'linear':
-           env = MultitaskShapesLinear(
+           env = MultitaskShapesTerminal(
                 obj_ftr_combs=obj_ftr_combs,
                 door_ftr_combs=door_ftr_combs,
                 grid=self._hparams["grid"], 
@@ -736,7 +734,7 @@ class ShapesMultitaskFactory(ABC):
                 store_path=self._store_path, 
                 max_steps=self._hparams["max_steps"], 
                 slip_chance=self._hparams["slip_chance"], 
-                one_hot=self._hparams["one_hot"],
+                featureset_id=self._hparams["featureset_id"],
                 seed=self._hparams["seed"]
             )
         else:
@@ -753,7 +751,7 @@ class ShapesMultitaskFactory(ABC):
                 store_path=self._store_path, 
                 max_steps=self._hparams["max_steps"], 
                 slip_chance=self._hparams["slip_chance"], 
-                one_hot=self._hparams["one_hot"],
+                featureset_id=self._hparams["featureset_id"],
                 seed=self._hparams["seed"]
             )
         return env 
@@ -813,7 +811,7 @@ if __name__ == "__main__":
     instrs = env_factory.get_all_instructions()
     
     for episode in tqdm(range(10)):
-        obs, _ = env.reset(options={"goal": DEFAULT_OBJECTS[0]})
+        obs, _ = env.reset()
         done = False
 
         while not done:

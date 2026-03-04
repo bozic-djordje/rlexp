@@ -46,7 +46,7 @@ environment:
     colour: [red, blue, green, yellow]
 
   num_confounding_features: 1
-  one_hot: True
+  featureset_id: 1
 
   target_obj_spawn_likelihood: 0.5
 

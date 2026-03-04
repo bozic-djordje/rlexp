@@ -143,7 +143,7 @@ class Actor(SalientObj):
         self._id = 0
         self._loc = loc
         self._last_mov = "up"
-        self._inventory = None
+        self._inventory: Shape = None
 
     def set_last_move(self, act: str):
         self._last_mov = act
@@ -202,7 +202,7 @@ DEFAULT_DOORS = [
 
 
 class GameMap:
-    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, n_confound_ftrs:int=0, one_hot:bool=True, seed:int=0):
+    def __init__(self, grid: List[str], objects: List[Shape], doors: List[Door], features: Dict, n_confound_ftrs:int=0, seed:int=0):
         self.rng = np.random.default_rng(seed)
         
         self._walls = []
@@ -210,11 +210,10 @@ class GameMap:
         self._doors: List[Door] = deepcopy(doors)
         self._door_locs: List[Tuple] = []
 
-        self._one_hot = one_hot
-
         grid_mat = np.array(grid)
         self._wall_mask = np.equal(grid_mat, 'W')
         self._door_mask = np.equal(grid_mat, 'D')
+        self._empty_mask = np.equal(grid_mat, ' ')
 
         # Map between feature names (e.g. blue) and their values in the observation space (e.g. 2)
         self.ftr_name_to_val = {}
@@ -229,6 +228,10 @@ class GameMap:
             for idx, name in enumerate(feature_names):
                 self.ftr_name_to_val[name] = idx+1
 
+        # One-step events
+        self.ev_picked_up: bool = False
+        self.active_obj = None
+
         # repr_vec - a factored state observed by the agent
         self.n_cnfd_ftrs = n_confound_ftrs
         self.n_obj_ftrs = 5 + n_confound_ftrs
@@ -236,20 +239,14 @@ class GameMap:
         self.n_agent_ftrs = 2
 
         self._obs = np.zeros(self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors) + self.n_agent_ftrs, dtype=np.uint8)
-        self._door_idxs_start = self.n_obj_ftrs*len(objects)
+        self.door_idxs_start = self.n_obj_ftrs*len(objects)
         self._agent_idxs_start = self.n_obj_ftrs*len(objects) + self.n_door_ftrs*len(doors)
-        self._n_objects = len(objects)
-        self._n_doors = len(doors)
-
-        if self._one_hot:
-            if "colour" not in self.ftr_category_to_range or "shape" not in self.ftr_category_to_range:
-                raise ValueError("One-hot observations require both 'colour' and 'shape' feature categories.")
-
-            self._colour_ftr_range = self.ftr_category_to_range["colour"]
-            self._shape_ftr_range = self.ftr_category_to_range["shape"]
-            self._colour_eye = np.eye(self._colour_ftr_range, dtype=np.uint8)
-            self._shape_eye = np.eye(self._shape_ftr_range, dtype=np.uint8)
-            self._rnd_ftr_eye = np.eye(RND_FTR_RNG, dtype=np.uint8)
+        self.n_objects = len(objects)
+        self.n_doors = len(doors)
+            
+        self.colour_eye = np.eye(self.ftr_category_to_range["colour"], dtype=np.uint8)
+        self.shape_eye = np.eye(self.ftr_category_to_range["shape"], dtype=np.uint8)
+        self.rnd_ftr_eye = np.eye(RND_FTR_RNG, dtype=np.uint8)
         
         obj_idx = 0
         door_idx = 0
@@ -290,13 +287,13 @@ class GameMap:
                     door = self._doors[door_idx]
                     door.activate(loc=(x,y), unique_id=door_idx, ftr_name_to_val=self.ftr_name_to_val, n_confound_ftrs=n_confound_ftrs)
                     self._door_locs.append((x,y))
-                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs] = x
-                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+1] = y
-                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+2] = door.colour_feature
-                    self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+3] = int(door.locked)
+                    self._obs[self.door_idxs_start + door_idx*self.n_door_ftrs] = x
+                    self._obs[self.door_idxs_start + door_idx*self.n_door_ftrs+1] = y
+                    self._obs[self.door_idxs_start + door_idx*self.n_door_ftrs+2] = door.colour_feature
+                    self._obs[self.door_idxs_start + door_idx*self.n_door_ftrs+3] = int(door.locked)
 
                     for i in range(n_confound_ftrs):
-                        self._obs[self._door_idxs_start + door_idx*self.n_door_ftrs+4+i] = door.cnfd_ftrs[f"random_feature_{i}"]
+                        self._obs[self.door_idxs_start + door_idx*self.n_door_ftrs+4+i] = door.cnfd_ftrs[f"random_feature_{i}"]
 
                     if door.is_goal:
                         self._goal_object = door
@@ -308,7 +305,7 @@ class GameMap:
 
         # If agent starts at a random location
         if self._actor is None:
-            coords = np.argwhere(self.empty_mask)
+            coords = np.argwhere(self._empty_mask)
             idx = self.rng.integers(len(coords))
             y, x = coords[idx]
             
@@ -354,34 +351,32 @@ class GameMap:
         return True if self._actor.inventory is not None else False
     
     @property
-    def observation(self):
-        if not self._one_hot:
-            return self._obs.copy()
-
-        obj_obs = self._obs[:self._door_idxs_start].reshape(self._n_objects, self.n_obj_ftrs)
-        door_obs = self._obs[self._door_idxs_start:self._agent_idxs_start].reshape(self._n_doors, self.n_door_ftrs)
-
-        obj_colour_1h = self._colour_eye[obj_obs[:, 2].astype(np.int16) - 1]
-        obj_shape_1h = self._shape_eye[obj_obs[:, 3].astype(np.int16) - 1]
-        door_colour_1h = self._colour_eye[door_obs[:, 2].astype(np.int16) - 1]
-
-        if self.n_cnfd_ftrs > 0:
-            obj_cnfd_1h = self._rnd_ftr_eye[obj_obs[:, 5:].astype(np.int16)].reshape(
-                self._n_objects, self.n_cnfd_ftrs * RND_FTR_RNG
-            )
-            door_cnfd_1h = self._rnd_ftr_eye[door_obs[:, 4:].astype(np.int16)].reshape(
-                self._n_doors, self.n_cnfd_ftrs * RND_FTR_RNG
-            )
+    def inventory_shape(self):
+        if self._actor.inventory is not None:
+            return self._actor.inventory.shape
         else:
-            obj_cnfd_1h = np.zeros((self._n_objects, 0), dtype=np.uint8)
-            door_cnfd_1h = np.zeros((self._n_doors, 0), dtype=np.uint8)
-
-        obj_encoded = np.concatenate((obj_obs[:, :2], obj_colour_1h, obj_shape_1h, obj_obs[:, 4:5], obj_cnfd_1h), axis=1)
-        door_encoded = np.concatenate((door_obs[:, :2], door_colour_1h, door_obs[:, 3:4], door_cnfd_1h), axis=1)
-
-        return np.concatenate(
-            (obj_encoded.reshape(-1), door_encoded.reshape(-1), self._obs[self._agent_idxs_start:].copy())
-        )
+            return None
+    
+    @property
+    def inventory_colour(self):
+        if self._actor.inventory is not None:
+            return self._actor.inventory.colour
+        else:
+            return None
+    
+    @property
+    def map_state(self):
+        return self._obs.copy()
+    
+    @property
+    def obj_locs(self):
+        return [obj.loc for obj in self._objects]
+    
+    def obj_at_loc_colour_shape(self, loc: Tuple) -> Shape:
+        for obj in self._objects:
+            if obj.loc == loc:
+                return obj.colour, obj.shape
+        return None, None
     
     def object_id_to_obs_idx(self, unique_id:int):
         obj_x = unique_id*self.n_obj_ftrs
@@ -392,10 +387,10 @@ class GameMap:
         return obj_x, obj_y, obj_colour, obj_shape, obj_picked_up
 
     def door_id_to_obs_idx(self, unique_id:int):
-        obj_x = self._door_idxs_start + unique_id*self.n_door_ftrs
-        obj_y = self._door_idxs_start + unique_id*self.n_door_ftrs + 1
-        obj_colour = self._door_idxs_start + unique_id*self.n_door_ftrs + 2
-        locked = self._door_idxs_start + unique_id*self.n_door_ftrs + 3
+        obj_x = self.door_idxs_start + unique_id*self.n_door_ftrs
+        obj_y = self.door_idxs_start + unique_id*self.n_door_ftrs + 1
+        obj_colour = self.door_idxs_start + unique_id*self.n_door_ftrs + 2
+        locked = self.door_idxs_start + unique_id*self.n_door_ftrs + 3
         return obj_x, obj_y, obj_colour, locked
 
     def move(self, loc:Tuple, act:str) -> bool:
@@ -429,6 +424,8 @@ class GameMap:
                 if success:
                     _, _, _, _, picked_up = self.object_id_to_obs_idx(unique_id=obj.unique_id)
                     self._obs[picked_up] = 1
+                    self.active_obj = deepcopy(obj)
+                    self.ev_picked_up = True
                 break
         
         return success
@@ -483,6 +480,40 @@ class GameMap:
                 break
         
         return success
+    
+    def destroy(self, obj_loc: Tuple) -> bool:
+        obj_to_del = None
+        success = False
+
+        for obj in self._objects:
+            if obj.loc == obj_loc:
+                obj_to_del = obj
+                break
+        
+        if obj_to_del is not None:
+            self.active_obj = deepcopy(obj_to_del)
+            obj_x, obj_y, obj_colour, obj_shape, obj_picked_up = self.object_id_to_obs_idx(unique_id=obj_to_del.unique_id)
+            _ = self._objects.remove(obj_to_del)
+            self._obs[obj_x] = 0
+            self._obs[obj_y] = 0
+            self._obs[obj_colour] = 0
+            self._obs[obj_shape] = 0
+            self._obs[obj_picked_up] = 0
+            
+            if obj_to_del == self._goal_object:
+                del self._goal_object
+                self._goal_object = None
+            del(obj_to_del)
+            success = True
+            self.ev_picked_up = True
+            
+        
+        return success
+    
+    def reset_events(self):
+        self.ev_picked_up = False
+        del self.active_obj
+        self.active_obj = None
     
     def render_feature_grid(self, cell_size:int=60):
         """Render the grid with color fill in a vectorized manner.
@@ -561,19 +592,20 @@ class GameMap:
             overlay_with_alpha(image, inventory_img, x_offset, y_offset)
         
         # Plot goal position
-        y0 = self.goal_object_loc[0] * cell_size
-        x0 = self.goal_object_loc[1] * cell_size
-        x_offset = x0 + (cell_size - small_size) // 2
-        y_offset = y0 + (cell_size - small_size) // 2
-        overlay_with_alpha(image, goal_image, x_offset, y_offset)
+        if self._goal_object is not None:
+            y0 = self.goal_object_loc[0] * cell_size
+            x0 = self.goal_object_loc[1] * cell_size
+            x_offset = x0 + (cell_size - small_size) // 2
+            y_offset = y0 + (cell_size - small_size) // 2
+            overlay_with_alpha(image, goal_image, x_offset, y_offset)
 
 
 class Shapes(gym.Env):
-    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, one_hot:bool=True, slip_chance:float=0, seed:int=0):
+    def __init__(self, objects: List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, featureset_id:int=0, seed:int=0):
         self._store_path = store_path
         self._assets_path = ASSETS_PATH
         self._slip_chance = slip_chance
-        self._one_hot = one_hot
+        self._featureset_id = featureset_id
 
         self._grid = deepcopy(grid)
         self._objects = deepcopy(objects)
@@ -581,8 +613,9 @@ class Shapes(gym.Env):
         self._features = features
         self._n_cnfd_ftrs = n_confound_ftrs
 
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, n_confound_ftrs=self._n_cnfd_ftrs, one_hot=self._one_hot, seed=seed)
-        self.observation_space = gym.spaces.MultiDiscrete([10] * self.map.observation.shape[0])
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
+        self.sf = SemanticFeatures(map=self.map, featureset_id=self._featureset_id)
+        self.observation_space = gym.spaces.MultiDiscrete([10] * self.sf.obs.shape[0])
 
         self._action_to_direction = {
             0: np.array([-1, 0]), # up
@@ -627,7 +660,11 @@ class Shapes(gym.Env):
     
     @property
     def obs(self) -> gym.spaces.MultiDiscrete:
-        return self.map.observation
+        return self.sf.obs
+    
+    @property
+    def map_state(self) -> gym.spaces.MultiDiscrete:
+        return self.map.map_state
     
     @property
     def goal_object(self):
@@ -660,7 +697,8 @@ class Shapes(gym.Env):
             doors = deepcopy(self._doors)
         grid = deepcopy(self._grid)
         
-        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, n_confound_ftrs=self._n_cnfd_ftrs, one_hot=self._one_hot, seed=seed)
+        self.map = GameMap(grid=grid, objects=objects, doors=doors, features=self._features, n_confound_ftrs=self._n_cnfd_ftrs, seed=seed)
+        self.sf = SemanticFeatures(map=self.map, featureset_id=self._featureset_id)
         return self.obs, info
     
     def _movement(self, action) -> bool:
@@ -673,6 +711,8 @@ class Shapes(gym.Env):
             - 5: drop
             - 6: use
         """
+        self.map.reset_events()
+
         # Update agent location for the movement actions
         if self.rng.random() < self._slip_chance:
             if action == 0:
@@ -739,7 +779,7 @@ class Shapes(gym.Env):
 
 class ShapesGoto(Shapes):
     def step(self, action):
-        obs, _, _, truncated, info = super().step(action)
+        _, _, _, truncated, info = super().step(action)
         
         is_terminal = False
         reward = -1
@@ -747,76 +787,33 @@ class ShapesGoto(Shapes):
         if self.map.agent_loc == self.map.goal_object_loc:
             is_terminal = True
             reward = 1
+            self.map.destroy(obj_loc=self.map.agent_loc)
         
-        return obs, reward, is_terminal, truncated, info
+        return self.obs, reward, is_terminal, truncated, info
 
 
-class ShapesSemantic(Shapes):
-    def __init__(self, desireable_obj: Shape, spawned_object:Shape, doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, one_hot:bool=True, slip_chance:float=0, seed:int=0):
-        super().__init__([spawned_object], doors, grid, features, store_path, n_confound_ftrs, max_steps, one_hot, slip_chance, seed)
+class ShapesTerminal(Shapes):
+    def __init__(self, desireable_obj: Shape, spawned_objects:List[Shape], doors: List[Door], grid: List, features: Dict, store_path:str, n_confound_ftrs:int=0, max_steps:int=None, slip_chance:float=0, featureset_id:int=0, seed:int=0):
+        super().__init__(spawned_objects, doors, grid, features, store_path, n_confound_ftrs, max_steps, slip_chance, featureset_id, seed)
         self.desireable_obj = desireable_obj
-        self.observation_space = gym.spaces.MultiDiscrete(
-            np.concatenate((self.observation_space.nvec, np.array([2, 2], dtype=self.observation_space.nvec.dtype)))
-        )
-        self.picked_up_just_now = 0
-
-    def semantic_feature_mask_0(self, obs):
-        at_terminal = int(self.map.agent_loc == self.terminal_map_loc)
-        at_goal_obj = int(self.map.agent_loc == self.map.goal_object_loc)
-        semantic_mask = np.array([at_terminal, at_goal_obj], dtype=obs.dtype)
-        return np.concatenate((obs, semantic_mask), axis=0)
-    
-    def semantic_feature_mask_1(self, obs):
-        at_terminal = int(self.map.agent_loc == self.terminal_map_loc)
-        at_goal_obj = int(self.map.agent_loc == self.map.goal_object_loc)
-        bias_term = 1.0
-
-        one_hot_colour = np.zeros(self.map.ftr_category_to_range["colour"], dtype=obs.dtype)
-        colour_idx = self.map.ftr_name_to_val[self.map.goal_object.colour] - 1
-        one_hot_colour[colour_idx] = 1
-
-        one_hot_shape = np.zeros(self.map.ftr_category_to_range["shape"], dtype=obs.dtype)
-        shape_idx = self.map.ftr_name_to_val[self.map.goal_object.shape] - 1
-        one_hot_shape[shape_idx] = 1     
-
-        one_hot_colour_gated = one_hot_colour * self.picked_up_just_now
-        one_hot_shape_gated = one_hot_shape * self.picked_up_just_now
-
-        semantic_mask = np.concatenate(
-            (
-                np.array([at_terminal, at_goal_obj, bias_term], dtype=obs.dtype),
-                one_hot_colour_gated,
-                one_hot_shape_gated,
-            ), axis=0
-        )
-        return np.concatenate((obs, semantic_mask), axis=0)
     
     def step(self, action):
-        obs, _, _, truncated, info = super().step(action)
+        _, _, _, truncated, info = super().step(action)
         
         is_terminal = False
         reward = -1
-        self.picked_up_just_now = 0
 
         if self.map.agent_loc == self.terminal_map_loc:
             is_terminal = True
             reward = 3    
-        elif self.map.agent_loc == self.map.goal_object_loc:
-            # TODO: This is very hacky. There is no goal object in this Shapes task, but if we have only one object it will be interpreted by the map
-            # as the goal object so it is fine.
-            if self.map.goal_object == self.desireable_obj and not self.goal_object.picked_up:
+        elif self.map.agent_loc in self.map.obj_locs:
+            stepped_on_colour, stepped_on_loc = self.map.obj_at_loc_colour_shape(loc=self.map.agent_loc)
+            if stepped_on_colour == self.desireable_obj.colour and stepped_on_loc == self.desireable_obj.shape:
                 reward = 12
-                self.map.pick_up()
-                self.picked_up_just_now = 1
-            elif (self.map.goal_object.colour == self.desireable_obj.colour or self.map.goal_object.shape == self.desireable_obj.shape) and not self.goal_object.picked_up:
+            elif stepped_on_colour == self.desireable_obj.colour or stepped_on_loc == self.desireable_obj.shape:
                 reward = 6
-                self.map.pick_up()
-                self.picked_up_just_now = 1
-            # elif not self.goal_object.picked_up:
-            #     reward = -10
-            #     self.map.pick_up()
-            # self.picked_up_just_now = 1
-        return obs, reward, is_terminal, truncated, info
+            self.map.destroy(obj_loc=self.map.agent_loc)
+        return self.obs, reward, is_terminal, truncated, info
     
 
 class ShapesPickup(Shapes):
@@ -862,6 +859,95 @@ class ShapesRetrieve(Shapes):
             reward = 1
         
         return obs, reward, is_terminal, truncated, info
+    
+
+class SemanticFeatures:
+    def __init__(self, map: GameMap, featureset_id:int):
+        self._map = map
+        self._featureset_id = featureset_id
+
+    def _one_hot_encode(self):
+        map_state = self._map.map_state
+
+        obj_obs = map_state[:self._map.door_idxs_start].reshape(self._map.n_objects, self._map.n_obj_ftrs)
+        door_obs = map_state[self._map.door_idxs_start:self._map._agent_idxs_start].reshape(self._map.n_doors, self._map.n_door_ftrs)
+
+        obj_colour_idx = obj_obs[:, 2].astype(np.int16)
+        obj_shape_idx = obj_obs[:, 3].astype(np.int16)
+        door_colour_idx = door_obs[:, 2].astype(np.int16)
+
+        obj_colour_1h = np.zeros((self._map.n_objects, self._map.colour_eye.shape[0]), dtype=np.uint8)
+        obj_shape_1h = np.zeros((self._map.n_objects, self._map.shape_eye.shape[0]), dtype=np.uint8)
+        door_colour_1h = np.zeros((self._map.n_doors, self._map.colour_eye.shape[0]), dtype=np.uint8)
+
+        valid_obj_colour = obj_colour_idx > 0
+        valid_obj_shape = obj_shape_idx > 0
+        valid_door_colour = door_colour_idx > 0
+
+        obj_colour_1h[valid_obj_colour] = self._map.colour_eye[obj_colour_idx[valid_obj_colour] - 1]
+        obj_shape_1h[valid_obj_shape] = self._map.shape_eye[obj_shape_idx[valid_obj_shape] - 1]
+        door_colour_1h[valid_door_colour] = self._map.colour_eye[door_colour_idx[valid_door_colour] - 1]
+
+        if self._map.n_cnfd_ftrs > 0:
+            obj_cnfd_1h = self._map.rnd_ftr_eye[obj_obs[:, 5:].astype(np.int16)].reshape(
+                self._map.n_objects, self._map.n_cnfd_ftrs * RND_FTR_RNG
+            )
+            door_cnfd_1h = self._map.rnd_ftr_eye[door_obs[:, 4:].astype(np.int16)].reshape(
+                self._map.n_doors, self._map.n_cnfd_ftrs * RND_FTR_RNG
+            )
+        else:
+            obj_cnfd_1h = np.zeros((self._map.n_objects, 0), dtype=np.uint8)
+            door_cnfd_1h = np.zeros((self._map.n_doors, 0), dtype=np.uint8)
+
+        obj_encoded = np.concatenate((obj_obs[:, :2], obj_colour_1h, obj_shape_1h, obj_obs[:, 4:5], obj_cnfd_1h), axis=1)
+        door_encoded = np.concatenate((door_obs[:, :2], door_colour_1h, door_obs[:, 3:4], door_cnfd_1h), axis=1)
+
+        return np.concatenate(
+            (obj_encoded.reshape(-1), door_encoded.reshape(-1), map_state[self._map._agent_idxs_start:].copy())
+        )
+    
+    def _semantic_feature_mask_all(self, obs):
+        semantic_mask = [1.0]
+        if self._map.terminal_map_loc is not None:
+            at_terminal = int(self._map.agent_loc == self._map.terminal_map_loc)
+            semantic_mask.append(at_terminal)
+
+        one_hot_colour = np.zeros(self._map.ftr_category_to_range["colour"], dtype=obs.dtype)
+        one_hot_shape = np.zeros(self._map.ftr_category_to_range["shape"], dtype=obs.dtype)
+        one_hot_random = np.zeros(self._map.n_cnfd_ftrs * RND_FTR_RNG, dtype=obs.dtype)
+
+        if self._map.ev_picked_up and self._map.active_obj is not None:
+            
+            colour_idx = self._map.ftr_name_to_val[self._map.active_obj.colour] - 1
+            one_hot_colour[colour_idx] = 1
+        
+            shape_idx = self._map.ftr_name_to_val[self._map.active_obj.shape] - 1
+            one_hot_shape[shape_idx] = 1
+
+            for i in range(self._map.n_cnfd_ftrs):
+                random_val = int(self._map.active_obj.cnfd_ftrs[f"random_feature_{i}"])
+                random_offset = i * RND_FTR_RNG
+                one_hot_random[random_offset + random_val] = 1
+
+        semantic_mask = np.concatenate(
+            (
+                np.array(semantic_mask, dtype=obs.dtype),
+                one_hot_colour,
+                one_hot_shape,
+                one_hot_random,
+            ), axis=0
+        )
+        return np.concatenate((obs, semantic_mask), axis=0)
+    
+    @property
+    def obs(self):
+        obs = self._one_hot_encode()
+        if self._featureset_id == 0:
+            return obs
+        elif self._featureset_id == 1:
+            return self._semantic_feature_mask_all(obs=obs)
+        else:
+            raise ValueError("Unrecognised featureset id passed. Use either the default argument when constructing Shapes, or pass in a legitimate value.")
 
 
 if __name__ == '__main__':

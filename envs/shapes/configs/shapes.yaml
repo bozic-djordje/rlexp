@@ -14,7 +14,7 @@ grid:
   - ['W', 'K', 'W', 'D', 'W', 'K', 'W']
   - ['W', ' ', ' ', ' ', ' ', ' ', 'W']
   - ['W', ' ', ' ', 'W', 'W', 'D', 'W']
-  - ['W', 'A', ' ', 'W', 'W', 'O', 'W']
+  - ['W', 'A', 'G', 'W', 'W', 'O', 'W']
   - ['W', 'W', 'W', 'W', 'W', 'W', 'W']
 
 max_steps: 200
@@ -30,7 +30,7 @@ features:
   colour: [red, blue, green, yellow]
 
 num_confounding_features: 0
-one_hot: True
+featureset_id: 1
 
 # can contain keys and doors
 reserved_combinations:

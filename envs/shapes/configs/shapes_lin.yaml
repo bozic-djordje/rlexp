@@ -1,8 +1,8 @@
 grid:
   - ['W', 'W', 'W', 'W', 'W']
-  - ['W', ' ', ' ', 'G', 'W']
+  - ['W', 'O', ' ', 'G', 'W']
   - ['W', ' ', 'A', ' ', 'W']
-  - ['W', 'O', ' ', ' ', 'W']
+  - ['W', 'O', ' ', 'O', 'W']
   - ['W', 'W', 'W', 'W', 'W']
 
 
@@ -20,9 +20,9 @@ features:
   colour: [red, blue, green, yellow]
 
 num_confounding_features: 1
-one_hot: True
+featureset_id: 1
 
-target_obj_spawn_likelihood: 0.25
+target_obj_spawn_likelihood: 0.5
 
 # can contain keys and doors
 reserved_combinations:

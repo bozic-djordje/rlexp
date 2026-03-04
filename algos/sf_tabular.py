@@ -368,6 +368,7 @@ if __name__ == '__main__':
     num_tasks = len(all_instructions)
     
     s = env.obs
+    # TODO: Semantic features now more deeply integrated into shapes
     s = append_semantic_features(s, SF_MASK)
     prev_instr = s["instr"]
     
