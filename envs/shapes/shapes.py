@@ -214,6 +214,7 @@ class GameMap:
         self._wall_mask = np.equal(grid_mat, 'W')
         self._door_mask = np.equal(grid_mat, 'D')
         self._empty_mask = np.equal(grid_mat, ' ')
+        self._draw_goal = True
 
         # Map between feature names (e.g. blue) and their values in the observation space (e.g. 2)
         self.ftr_name_to_val = {}
@@ -500,14 +501,12 @@ class GameMap:
             self._obs[obj_shape] = 0
             self._obs[obj_picked_up] = 0
             
-            if self._goal_object is not None and obj_to_del == self._goal_object:
-                del self._goal_object
-                self._goal_object = None
+            if obj_to_del == self._goal_object:
+               self._draw_goal = False
             del(obj_to_del)
             success = True
             self.ev_picked_up = True
             
-        
         return success
     
     def reset_events(self):
@@ -592,7 +591,7 @@ class GameMap:
             overlay_with_alpha(image, inventory_img, x_offset, y_offset)
         
         # Plot goal position
-        if self._goal_object is not None:
+        if self._goal_object is not None and self._draw_goal:
             y0 = self.goal_object_loc[0] * cell_size
             x0 = self.goal_object_loc[1] * cell_size
             x_offset = x0 + (cell_size - small_size) // 2
