@@ -500,7 +500,7 @@ class GameMap:
             self._obs[obj_shape] = 0
             self._obs[obj_picked_up] = 0
             
-            if obj_to_del == self._goal_object:
+            if self._goal_object is not None and obj_to_del == self._goal_object:
                 del self._goal_object
                 self._goal_object = None
             del(obj_to_del)
