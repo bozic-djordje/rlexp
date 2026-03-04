@@ -319,15 +319,6 @@ class SFTabular:
                 self.r_optim[idx] = opt
 
 
-def append_semantic_features(s, semantic_f):
-    if semantic_f is not None:
-        s_ftr = semantic_f(s["features"])
-    else:
-        s_ftr = s["features"]
-    s["features"] = s_ftr
-    return s
-
-
 if __name__ == '__main__':
     import os
     from tqdm import tqdm
@@ -362,15 +353,13 @@ if __name__ == '__main__':
         store_path=store_path
     )
     env: MultitaskShapes = env_factory.get_env(set_id='TRAIN')
-    SF_MASK = env._env.semantic_feature_mask_0
     
     all_instructions = env_factory.get_all_instructions(set_id="TRAIN")
     num_tasks = len(all_instructions)
     
     s = env.obs
-    # TODO: Semantic features now more deeply integrated into shapes
-    s = append_semantic_features(s, SF_MASK)
     prev_instr = s["instr"]
+    goal_object = env._env.map.goal_object
     
     agent = SFTabular(
         action_space=env.action_space,
@@ -406,7 +395,6 @@ if __name__ == '__main__':
         while not tasks_done:
             a = agent.forward(s=s)
             s_next, r, is_terminal, truncated, info = env.step(action=a)
-            s_next = append_semantic_features(s_next, SF_MASK)
             done = is_terminal or truncated
             
             global_step += 1
@@ -449,12 +437,13 @@ if __name__ == '__main__':
             if done:
                 pbar.update(1)
                 torch.save(agent.state_dict(), f'{store_path}/last_model.pth')
-                if env._env.map.goal_object == env._env.desireable_obj:
+                if goal_object is not None and goal_object == env._env.desireable_obj:
                     logger.write("train/epoch", global_step, {"return_present": ret})
                 else:
                     logger.write("train/epoch", global_step, {"return_absent": ret})
                 s, info = env.reset()
-                s = append_semantic_features(s, SF_MASK)
+                goal_object = env._env.map.goal_object
+
                 tasks_done = info["tasks_exhausted"]
                 ret = 0
                 if s["instr"] != prev_instr:
